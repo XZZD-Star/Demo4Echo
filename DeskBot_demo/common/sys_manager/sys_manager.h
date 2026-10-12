@@ -22,7 +22,7 @@ typedef struct {
     int port;
     char token[20];
     char device_id[20];
-    char aliyun_api_key[36];        // 阿里百炼 api key for deepseek (need store)
+    char aliyun_api_key[128];        // 阿里百炼 api key for deepseek (need store)
     int protocol_version;
     int sample_rate;
     int channels;

@@ -3,11 +3,11 @@ import dashscope
 class Settings:
     protocol_version = 2
     # LLM API 密钥
-    dashscope.api_key = "sk-d8e4dc07bc01425fa83e851bc1d66b7f"
+    dashscope.api_key = "sk-ws-H.PIYRDLE.F3VO.MEUCIQCOfKXDIVJWyHnNb85YEG4oqKAKrWLEZCX3_KdNZ-PG3gIgJZvZWQubaidmUbczPMZSG8Bk9dXZeNmh5Ll1tU3Gqj4"
 
     # 模型选择
-    INTENT_MODEL = "qwen-turbo"       # 专门用于意图识别
-    CHAT_MODEL = "qwen-turbo"         # 用于常规对话
+    INTENT_MODEL = "qwen-plus-2025-07-28"       # 专门用于意图识别
+    CHAT_MODEL = "qwen-plus-2025-07-28"         # 用于常规对话
 
     # device
     ASR_DEVICE = "cpu"            # ASR 模型使用的设备
