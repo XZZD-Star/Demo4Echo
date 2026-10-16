@@ -40,9 +40,8 @@ class TextHandler:
                 logger.info("Client is idle, resetting services")
 
             elif data.get('state') == 'listening':
-                self.service_manager.is_vad = False
-                self.service_manager.vad_service.reset()
-                self.service_manager.asr_service.reset()
+                # 根据配置启动本地或云端 ASR 会话。
+                self.service_manager.start_asr_session()
                 # 提前打开tts流
                 self.service_manager.tts_service.tts_set(on_data=self.service_manager._tts_on_data, on_complete=self.service_manager._tts_on_complete)
 

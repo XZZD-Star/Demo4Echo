@@ -23,7 +23,24 @@ class AudioHandler:
             if type == 0 and protocol_version == global_settings.protocol_version and self.service_manager.is_vad == False:
                 # 处理音频数据
                 pcm_data = self.service_manager.audio_processor.decode_audio(payload)
-                audio_data_np_array = np.frombuffer(pcm_data, dtype=np.int16)
+
+                # 云端模式：把解码后的 PCM 放入云端 ASR 发送队列。
+                if self.service_manager.asr_backend == "cloud":
+                    cloud_service = self.service_manager.cloud_asr_service
+
+                    if cloud_service is None:
+                        logger.warning(
+                            "收到音频帧，但当前没有活动的云端 ASR 会话。"
+                        )
+                        return
+
+                    cloud_service.send_audio(pcm_data)
+                    return
+
+                # 本地模式沿用原有 VAD + ASR 逻辑。
+                audio_data_np_array = np.frombuffer(
+                    pcm_data, dtype=np.int16
+                )
 
                 # 使用 VAD 检测语音活动
                 vad_result = self.service_manager.vad_service.process_audio_frame(audio_data_np_array)

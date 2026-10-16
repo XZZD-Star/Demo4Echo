@@ -1,5 +1,3 @@
-from services.vad_service import VADService
-from services.asr_service import ASRService
 from services.chat_service import ChatService
 from services.tts_service import TTSService
 from tools.registry import global_registry
@@ -10,13 +8,39 @@ from tools.logger import logger
 import queue
 import threading
 import json
+import os
 
 class ServiceManager:
     def __init__(self):
         # 初始化服务
         self.audio_processor = AudioProcessor()
-        self.vad_service = VADService()
-        self.asr_service = ASRService()
+
+        # 默认为本地模式；只有明确设置 cloud 才启用云端 ASR。
+        self.asr_backend = os.environ.get(
+            "ECHOMATE_ASR_BACKEND", "local"
+        ).strip().lower()
+
+        if self.asr_backend not in ("local", "cloud"):
+            raise ValueError(
+                "ECHOMATE_ASR_BACKEND 只能是 local 或 cloud"
+            )
+
+        self.cloud_asr_service = None
+
+        if self.asr_backend == "cloud":
+            # 云端模式不初始化本地 VAD 和 ASR 模型。
+            self.vad_service = None
+            self.asr_service = None
+            logger.info("ASR 后端：云端实时 ASR + 服务端 VAD")
+        else:
+            # 延迟导入，保证云端模式不依赖本地模型初始化。
+            from services.vad_service import VADService
+            from services.asr_service import ASRService
+
+            self.vad_service = VADService()
+            self.asr_service = ASRService()
+            logger.info("ASR 后端：本地 VAD + 本地 ASR")
+
         self.intent_service = IntentService(global_registry)
         self.chat_service = ChatService()
         self.tts_service = TTSService()
@@ -45,13 +69,79 @@ class ServiceManager:
         重置所有服务的状态
         """
         self.is_vad = False
-        self.vad_service.reset()
-        self.asr_service.reset()
+
+        if self.asr_backend == "cloud":
+            if self.cloud_asr_service is not None:
+                self.cloud_asr_service.stop()
+                self.cloud_asr_service = None
+        else:
+            self.vad_service.reset()
+            self.asr_service.reset()
+
         self.chat_service.chat_clear()
         try:
             self.tts_service.tts_close()
         except Exception as e:
             pass
+
+    def start_asr_session(self):
+        """根据当前后端启动一轮新的语音识别会话。"""
+        self.is_vad = False
+
+        if self.asr_backend == "local":
+            self.vad_service.reset()
+            self.asr_service.reset()
+            return
+
+        # 防止重复创建云端会话。
+        if self.cloud_asr_service is not None:
+            self.cloud_asr_service.stop()
+            self.cloud_asr_service = None
+
+        try:
+            from services.cloud_asr_service import CloudASRService
+
+            service = CloudASRService(
+                on_result=self._on_cloud_asr_result,
+                on_no_speech=self._on_cloud_asr_no_speech,
+            )
+            self.cloud_asr_service = service
+            service.start()
+            logger.info("已启动新一轮云端 ASR 会话。")
+
+        except Exception:
+            logger.exception("启动云端 ASR 会话失败。")
+            self.cloud_asr_service = None
+            self._on_cloud_asr_no_speech("云端 ASR 启动失败。")
+
+    def _on_cloud_asr_result(self, text):
+        """只在收到最终识别文本后触发一次对话。"""
+        text = (text or "").strip()
+        if not text:
+            self._on_cloud_asr_no_speech("最终识别文本为空。")
+            return
+
+        self.is_vad = True
+
+        result = {
+            "type": "asr",
+            "text": text,
+        }
+        self.ws_send_queue.put(json.dumps(result, ensure_ascii=False))
+        logger.info("云端 ASR 最终识别结果：%s", text)
+
+        self.task_manager.submit_task(self.chat_start_task, text)
+
+    def _on_cloud_asr_no_speech(self, reason):
+        """通知客户端本轮识别未能得到有效文本。"""
+        self.is_vad = True
+
+        result = {
+            "type": "vad",
+            "state": "no_speech",
+        }
+        self.ws_send_queue.put(json.dumps(result, ensure_ascii=False))
+        logger.warning("云端 ASR 未获得有效结果：%s", reason)
 
     def _tts_on_data(self, data):
         """
