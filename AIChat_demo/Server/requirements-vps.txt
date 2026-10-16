@@ -1,0 +1,7 @@
+# Echo-Mate VPS runtime: initial cloud-mode dependency set
+dashscope==1.27.6
+websockets==13.1
+websocket-client==1.9.2
+numpy==1.26.4
+fastapi>=0.111.1
+git+https://github.com/TeamPyOgg/PyOgg.git

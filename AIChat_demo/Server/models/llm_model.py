@@ -1,4 +1,3 @@
-from funasr import AutoModel
 import dashscope
 from tools.logger import logger
 
