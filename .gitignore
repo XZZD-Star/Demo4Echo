@@ -10,3 +10,6 @@ AIChat_demo/Server/logs/
 AIChat_demo/Server/*.bak*
 AIChat_demo/Server/**/*.bak*
 AIChat_demo/Server/test/*.pcm
+AIChat_demo/Server/.env
+AIChat_demo/Server/.env.*
+!AIChat_demo/Server/.env.example

@@ -1,5 +1,6 @@
 import dashscope
 from tools.logger import logger
+from config.settings import global_settings
 
 class LLMModel:
     def __init__(self, model_name: str = "qwen-turbo"):
@@ -48,7 +49,7 @@ class LLMModel:
 
         try:
             response = dashscope.Generation.call(
-                api_key=dashscope.api_key,
+                api_key=global_settings.DASHSCOPE_API_KEY,
                 model=self.model_name,
                 messages=self.messages,
                 result_format='message',
@@ -79,7 +80,7 @@ class LLMModel:
 
         try:
             responses = dashscope.Generation.call(
-                api_key=dashscope.api_key,
+                api_key=global_settings.DASHSCOPE_API_KEY,
                 model=self.model_name, # 模型列表：https://help.aliyun.com/zh/model-studio/getting-started/models
                 messages=messages,
                 result_format='message',

@@ -5,3 +5,4 @@ websocket-client==1.9.2
 numpy==1.26.4
 fastapi>=0.111.1
 git+https://github.com/TeamPyOgg/PyOgg.git
+python-dotenv>=1.0.1

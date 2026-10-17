@@ -9,9 +9,11 @@ import threading
 import websocket
 
 from tools.logger import logger
+from config.settings import global_settings
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
-MODEL = "qwen3-asr-flash-realtime"
+MODEL = global_settings.DASHSCOPE_ASR_MODEL
 SAMPLE_RATE = 16000
 PCM_BYTES_PER_SECOND = SAMPLE_RATE * 2  # PCM16、单声道
 NO_SPEECH_TIMEOUT_SECONDS = 3.0
@@ -30,7 +32,7 @@ class CloudASRService:
         self.on_result = on_result
         self.on_no_speech = on_no_speech
 
-        self.api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+        self.api_key = global_settings.DASHSCOPE_API_KEY
         if not self.api_key:
             raise RuntimeError(
                 "缺少 DASHSCOPE_API_KEY 环境变量，"
@@ -54,15 +56,13 @@ class CloudASRService:
         self._terminal = False
         self._speech_started = False
         self._sent_audio_seconds = 0.0
+        self._first_audio_sent_at = None
         self._started_at = time.monotonic()
 
     @staticmethod
     def _build_url():
-        """
-        支持直接配置完整实时 API 地址，或配置北京 Workspace ID。
-        不读取、不输出源码中的 API Key。
-        """
-        url = os.environ.get("DASHSCOPE_REALTIME_URL", "").strip()
+        """统一从服务端配置读取实时 ASR 地址。"""
+        url = global_settings.DASHSCOPE_REALTIME_URL
 
         if url:
             if not url.startswith("wss://"):
@@ -70,30 +70,33 @@ class CloudASRService:
                     "DASHSCOPE_REALTIME_URL 必须使用 wss:// 地址。"
                 )
 
-            if "model=" not in url:
-                url += (
-                    "&" if "?" in url else "?"
-                ) + f"model={MODEL}"
+            parts = urlsplit(url)
+            query = [
+                (k, v) for k, v in parse_qsl(
+                    parts.query, keep_blank_values=True
+                ) if k != "model"
+            ]
+            query.append(("model", MODEL))
+            return urlunsplit((
+                parts.scheme,
+                parts.netloc,
+                parts.path,
+                urlencode(query),
+                parts.fragment,
+            ))
 
-            return url
-
-        workspace_id = os.environ.get(
-            "DASHSCOPE_WORKSPACE_ID", ""
-        ).strip()
-
+        workspace_id = global_settings.DASHSCOPE_WORKSPACE_ID
         if not workspace_id:
             raise RuntimeError(
                 "缺少 DASHSCOPE_WORKSPACE_ID 或 "
                 "DASHSCOPE_REALTIME_URL 环境变量。"
             )
 
-        # 允许填写 Workspace ID 或北京地域的 API Host。
         workspace_id = workspace_id.removeprefix("https://")
         workspace_id = workspace_id.removeprefix("wss://")
         workspace_id = workspace_id.rstrip("/")
 
         suffix = ".cn-beijing.maas.aliyuncs.com"
-
         if workspace_id.endswith(suffix):
             host = workspace_id
         elif "." not in workspace_id:
@@ -107,7 +110,6 @@ class CloudASRService:
             f"wss://{host}/api-ws/v1/realtime"
             f"?model={MODEL}"
         )
-
     @staticmethod
     def _event(event_type, **kwargs):
         return {
@@ -307,6 +309,14 @@ class CloudASRService:
             except Exception:
                 pass
 
+    def _no_speech_timeout_expired(self):
+        if self._speech_started or self._first_audio_sent_at is None:
+            return False
+        return (
+            time.monotonic() - self._first_audio_sent_at
+            >= NO_SPEECH_TIMEOUT_SECONDS
+        )
+
     def _sender_loop(self):
         while not self._stop.is_set():
             if self._input_finished.is_set():
@@ -324,6 +334,15 @@ class CloudASRService:
             try:
                 pcm_data = self._audio_queue.get(timeout=0.1)
             except queue.Empty:
+                if self._no_speech_timeout_expired():
+                    elapsed = time.monotonic() - self._first_audio_sent_at
+                    logger.warning(
+                        "云端 ASR 无语音超时：真实经过 %.2f 秒，"
+                        "累计音频 %.2f 秒。",
+                        elapsed, self._sent_audio_seconds
+                    )
+                    self._fail("超过无语音等待时间。")
+                    break
                 continue
 
             if self._stop.is_set() or self._input_finished.is_set():
@@ -338,15 +357,21 @@ class CloudASRService:
                 self._fail("发送云端 ASR 音频失败。")
                 break
 
+            if self._first_audio_sent_at is None:
+                self._first_audio_sent_at = time.monotonic()
+
             self._sent_audio_seconds += (
                 len(pcm_data) / PCM_BYTES_PER_SECOND
             )
 
-            # 没有检测到任何语音时，避免会话永久等待。
-            if (
-                not self._speech_started
-                and self._sent_audio_seconds >= NO_SPEECH_TIMEOUT_SECONDS
-            ):
+            # 超时按真实经过时间计算，不按积压音频的累计时长计算。
+            if self._no_speech_timeout_expired():
+                elapsed = time.monotonic() - self._first_audio_sent_at
+                logger.warning(
+                    "云端 ASR 无语音超时：真实经过 %.2f 秒，"
+                    "累计音频 %.2f 秒。",
+                    elapsed, self._sent_audio_seconds
+                )
                 self._fail("超过无语音等待时间。")
                 break
 
