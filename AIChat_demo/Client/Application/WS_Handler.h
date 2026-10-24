@@ -18,6 +18,7 @@ private:
     void handle_asr_message(const Json::Value& root, Application* app);
     void handle_chat_message(const Json::Value& root, Application* app);
     void handle_tts_message(const Json::Value& root, Application* app);
+    void handle_notify_message(const Json::Value& root, Application* app);
     void handle_intent_message(const Json::Value& root);
 };
 

@@ -1,4 +1,5 @@
 #include "WS_Handler.h"
+#include "StateConfig.h"
 #include "../Utils/user_log.h"
 
 void WSHandler::ws_msg_handle(const std::string& message, bool is_binary, Application* app) {
@@ -25,6 +26,8 @@ void WSHandler::ws_msg_handle(const std::string& message, bool is_binary, Applic
                 handle_chat_message(root, app);
             } else if (typeStr == "tts") {
                 handle_tts_message(root, app);
+            } else if (typeStr == "notify") {
+                handle_notify_message(root, app);
             } else if (typeStr == "error") {
                 USER_LOG_ERROR("server erro msg: %s", message.c_str());
                 app->eventQueue_.Enqueue(static_cast<int>(AppEvent::fault_happen));
@@ -59,6 +62,7 @@ void WSHandler::ws_msg_handle(const std::string& message, bool is_binary, Applic
                 // 将解码后的Opus数据放入队列供播放器使用
                 app->audio_processor_.decode(opus_data.data(), opus_data.size(), pcm_data);
                 app->audio_processor_.addFrameToPlaybackQueue(pcm_data);
+                app->set_first_tts_audio_received(true);
             } else {
                 USER_LOG_WARN("Received frame with unexpected version or type");
             }
@@ -114,6 +118,33 @@ void WSHandler::handle_chat_message(const Json::Value& root, Application* app) {
             app->set_dialogue_completed(true);
         }
     }
+}
+
+// 处理主动播报通知
+void WSHandler::handle_notify_message(const Json::Value& root, Application* app) {
+    const Json::Value id = root["id"];
+    const Json::Value text = root["text"];
+
+    // 只在 idle 状态接受通知，避免打断正在进行的对话。
+    int state = app->getState();
+    if (state != static_cast<int>(AppState::idle)) {
+        USER_LOG_WARN("Notify dropped: client state=%d", state);
+        return;
+    }
+
+    USER_LOG_INFO("Received notify id=%d text=%s",
+                  id.isInt() ? id.asInt() : -1,
+                  text.isString() ? text.asCString() : "");
+
+    app->set_notify_mode(true);
+    app->set_notify_id(id.isInt() ? id.asInt() : 0);
+    // 通知音频不能触发对话流程的 speaking_msg_received。
+    app->set_first_audio_msg_received(false);
+    app->set_first_tts_audio_received(false);
+    app->set_tts_completed(false);
+    app->set_dialogue_completed(false);
+
+    app->eventQueue_.Enqueue(static_cast<int>(AppEvent::notify_received));
 }
 
 // 处理意图消息

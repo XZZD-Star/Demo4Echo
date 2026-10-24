@@ -154,8 +154,8 @@ static void _sys_para_init(void)
         strcpy(ui_system_para.location.city, "东城区");
         strcpy(ui_system_para.location.adcode, "110101");
         strcpy(ui_system_para.gaode_api_key, "your_amap_key");
-        strcpy(ui_system_para.aichat_app_info.addr, "172.32.0.100");
-        ui_system_para.aichat_app_info.port = 8765;
+        strcpy(ui_system_para.aichat_app_info.addr, ECHOMATE_SERVER_URL);
+        ui_system_para.aichat_app_info.port = ECHOMATE_SERVER_PORT;
         strcpy(ui_system_para.aichat_app_info.token, "123456");
         strcpy(ui_system_para.aichat_app_info.device_id, "00:11:22:33:44:55");
         strcpy(ui_system_para.aichat_app_info.aliyun_api_key, "your_aliyun_key");
@@ -166,6 +166,13 @@ static void _sys_para_init(void)
         // create a new config file and save
         sys_save_system_parameters(sys_config_path, &ui_system_para);
     }
+    // 服务端地址以 dev_conf.h 的宏为准，配置文件里的值不生效。
+    strncpy(ui_system_para.aichat_app_info.addr, ECHOMATE_SERVER_URL,
+            sizeof(ui_system_para.aichat_app_info.addr) - 1);
+    ui_system_para.aichat_app_info.addr[
+        sizeof(ui_system_para.aichat_app_info.addr) - 1] = '\0';
+    ui_system_para.aichat_app_info.port = ECHOMATE_SERVER_PORT;
+
     // WIFI
     ui_system_para.wifi_connected = sys_get_wifi_status();
     // TIME

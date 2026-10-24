@@ -61,6 +61,19 @@ public:
         return aliyun_api_key_;
     }
 
+    void set_notify_mode(bool flag) { notify_mode_ = flag; }
+    bool get_notify_mode() const { return notify_mode_; }
+
+    void set_notify_id(int id) { notify_id_ = id; }
+    int get_notify_id() const { return notify_id_; }
+
+    void set_first_tts_audio_received(bool flag) {
+        first_tts_audio_received_ = flag;
+    }
+    bool get_first_tts_audio_received() const {
+        return first_tts_audio_received_;
+    }
+
     void set_threads_stop_sig(bool flag) {
         threads_stop_flag_.store(flag);
     }
@@ -85,6 +98,9 @@ private:
     bool dialogue_completed_ = false;
     std::string aliyun_api_key_;
     int ws_protocolVersion_;
+    std::atomic<bool> notify_mode_{false};
+    std::atomic<int> notify_id_{0};
+    std::atomic<bool> first_tts_audio_received_{false};
     // 原子变量用于通知线程退出
     std::atomic<bool> threads_stop_flag_ = false;
     std::thread ws_msg_thread_;

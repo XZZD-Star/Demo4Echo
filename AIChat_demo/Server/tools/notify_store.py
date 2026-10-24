@@ -1,0 +1,296 @@
+"""主动播报通知队列的 SQLite 存储层。
+
+与 feishu_bot / monitor 共用同一个数据库文件，只使用标准库 sqlite3，
+不依赖任何虚拟环境内的第三方包。
+"""
+
+import sqlite3
+import time
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+DB_PATH = Path("/var/lib/echomate/assistant.db")
+
+LOCAL_TZ = timezone(timedelta(hours=8))
+
+SETTING_CACHE_TTL = 60.0
+_setting_cache = {}
+_setting_cache_at = 0.0
+
+
+def now_utc():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _connect():
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_notify_tables():
+    """建立通知队列表与运行期设置表。可重复调用。"""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    with _connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS notify_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 5,
+                text TEXT NOT NULL,
+                dedupe_key TEXT UNIQUE,
+                created_at_utc TEXT NOT NULL,
+                expires_at_utc TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                claimed_at_utc TEXT,
+                sent_at_utc TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_notify_pending
+                ON notify_outbox(status, priority, id);
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            );
+            """
+        )
+
+
+def enqueue(kind, text, dedupe_key=None, priority=5, ttl_minutes=60):
+    """写入一条待播报通知。dedupe_key 重复时静默忽略。
+
+    返回新记录的 id；若因去重被忽略则返回 None。
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+
+    created = now_utc()
+    expires = None
+    if ttl_minutes and ttl_minutes > 0:
+        expires = (
+            datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+        ).isoformat(timespec="seconds")
+
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO notify_outbox
+                (kind, priority, text, dedupe_key,
+                 created_at_utc, expires_at_utc, status)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending')
+            """,
+            (kind, int(priority), text, dedupe_key, created, expires),
+        )
+        if cursor.rowcount == 0:
+            return None
+        return cursor.lastrowid
+
+
+def expire_stale():
+    """把已过期或重试次数过多的 pending 记录标记为 expired。"""
+    current = now_utc()
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE notify_outbox
+            SET status = 'expired'
+            WHERE status IN ('pending', 'claimed')
+              AND expires_at_utc IS NOT NULL
+              AND expires_at_utc <= ?
+            """,
+            (current,),
+        )
+        conn.execute(
+            """
+            UPDATE notify_outbox
+            SET status = 'failed'
+            WHERE status IN ('pending', 'claimed')
+              AND attempts >= 3
+            """
+        )
+
+
+def recover_zombie(seconds=120):
+    """把领取后长时间未结束的记录回滚为 pending，防止进程被杀后卡死。"""
+    threshold = (
+        datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    ).isoformat(timespec="seconds")
+
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE notify_outbox
+            SET status = 'pending', claimed_at_utc = NULL
+            WHERE status = 'claimed'
+              AND (claimed_at_utc IS NULL OR claimed_at_utc <= ?)
+            """,
+            (threshold,),
+        )
+
+
+def claim_one():
+    """原子领取一条优先级最高的待播报通知。"""
+    expire_stale()
+
+    for _ in range(3):
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, kind, priority, text
+                FROM notify_outbox
+                WHERE status = 'pending'
+                  AND (expires_at_utc IS NULL OR expires_at_utc > ?)
+                ORDER BY priority ASC, id ASC
+                LIMIT 1
+                """,
+                (now_utc(),),
+            ).fetchone()
+
+            if row is None:
+                return None
+
+            cursor = conn.execute(
+                """
+                UPDATE notify_outbox
+                SET status = 'claimed', claimed_at_utc = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (now_utc(), row["id"]),
+            )
+
+            if cursor.rowcount == 1:
+                return {
+                    "id": row["id"],
+                    "kind": row["kind"],
+                    "priority": row["priority"],
+                    "text": row["text"],
+                }
+
+    return None
+
+
+def mark_sent(notify_id):
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE notify_outbox
+            SET status = 'sent', sent_at_utc = ?, last_error = NULL
+            WHERE id = ?
+            """,
+            (now_utc(), notify_id),
+        )
+
+
+def mark_failed(notify_id, error):
+    message = str(error)[:300]
+    with _connect() as conn:
+        conn.execute(
+            """
+            UPDATE notify_outbox
+            SET status = 'pending',
+                claimed_at_utc = NULL,
+                attempts = attempts + 1,
+                last_error = ?
+            WHERE id = ?
+            """,
+            (message, notify_id),
+        )
+        conn.execute(
+            """
+            UPDATE notify_outbox
+            SET status = 'failed'
+            WHERE id = ? AND attempts >= 3
+            """,
+            (notify_id,),
+        )
+
+
+def pending_count():
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM notify_outbox WHERE status = 'pending'"
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def _load_settings():
+    global _setting_cache, _setting_cache_at
+
+    now = time.monotonic()
+    if _setting_cache and now - _setting_cache_at < SETTING_CACHE_TTL:
+        return _setting_cache
+
+    values = {}
+    try:
+        with _connect() as conn:
+            for row in conn.execute("SELECT key, value FROM app_settings"):
+                values[row["key"]] = row["value"]
+    except sqlite3.Error:
+        values = dict(_setting_cache)
+
+    _setting_cache = values
+    _setting_cache_at = now
+    return values
+
+
+def get_setting(key, default=""):
+    value = _load_settings().get(key)
+    if value is None:
+        return default
+    return value
+
+
+def set_setting(key, value):
+    global _setting_cache_at
+
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at_utc)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at_utc = excluded.updated_at_utc
+            """,
+            (key, str(value), now_utc()),
+        )
+
+    _setting_cache_at = 0.0
+
+
+def _parse_hhmm(text):
+    if not text or ":" not in text:
+        return None
+    try:
+        hour, minute = text.split(":", 1)
+        hour = int(hour)
+        minute = int(minute)
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour * 60 + minute
+
+
+def is_quiet_now():
+    """静音时段判断。任一端为空即视为未启用静音。"""
+    start = _parse_hhmm(get_setting("notify_quiet_start", ""))
+    end = _parse_hhmm(get_setting("notify_quiet_end", ""))
+
+    if start is None or end is None or start == end:
+        return False
+
+    current = datetime.now(LOCAL_TZ)
+    minute_of_day = current.hour * 60 + current.minute
+
+    if start < end:
+        return start <= minute_of_day < end
+    return minute_of_day >= start or minute_of_day < end

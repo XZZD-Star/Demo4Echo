@@ -105,6 +105,9 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${AI_CHAT_CLIENT_PATH}/third_party/audio/waked.pcm
             ${OUTPUT_PATH}/third_party/audio/waked.pcm
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${AI_CHAT_CLIENT_PATH}/third_party/audio/notify.pcm
+            ${OUTPUT_PATH}/third_party/audio/notify.pcm
     COMMENT "Copying AI Chat necessary resource files to executable output directory"
 )
 

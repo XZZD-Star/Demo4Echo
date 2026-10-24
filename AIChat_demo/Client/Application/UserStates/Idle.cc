@@ -51,9 +51,12 @@ void IdleState::Exit(Application* app) {
     state_running_.store(false);
     state_running_thread_.join();
 
-    // playing waked up sound
-    std::string waked_sound_path = "third_party/audio/waked.pcm";
-    auto audioQueue = app->audio_processor_.loadAudioFromFile(waked_sound_path, 40);
+    // 主动播报时用提示音，普通唤醒仍用原唤醒音。
+    std::string tone_path = app->get_notify_mode()
+        ? "third_party/audio/notify.pcm"
+        : "third_party/audio/waked.pcm";
+    USER_LOG_INFO("Idle exit tone: %s", tone_path.c_str());
+    auto audioQueue = app->audio_processor_.loadAudioFromFile(tone_path, 40);
     while (!audioQueue.empty()) {
         const auto& frame = audioQueue.front();
         app->audio_processor_.addFrameToPlaybackQueue(frame);

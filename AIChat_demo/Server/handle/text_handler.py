@@ -33,20 +33,23 @@ class TextHandler:
 
         elif data.get('type') == 'state':
             # client 端 idle 信息
-            if data.get('state') == 'idle':
+            client_state = data.get('state')
+            self.service_manager.set_client_state(client_state)
+
+            if client_state == 'idle':
                 self.service_manager.reset_services()
                 logger.info("Client is idle, resetting services")
 
-            elif data.get('state') == 'listening':
+            elif client_state == 'listening':
                 # 根据配置启动本地或云端 ASR 会话。
                 self.service_manager.start_asr_session()
                 # 提前打开tts流
                 self.service_manager.tts_service.tts_set(on_data=self.service_manager._tts_on_data, on_complete=self.service_manager._tts_on_complete)
 
-            elif data.get('state') == 'thinking':
+            elif client_state == 'thinking':
                 logger.info("Client is thinking")
 
-            elif data.get('state') == 'speaking':
+            elif client_state == 'speaking':
                 logger.info("Client is speaking")
 
         else:

@@ -2,6 +2,7 @@ import asyncio
 from ws_server import WebSocketServer
 from threads.tts_thread import TTSGenerateThread
 from threads.audio_send_thread import AudioSendThread
+from threads.notify_thread import NotifyThread
 from tools.logger import logger
 from service_manager import ServiceManager
 import sys
@@ -20,6 +21,10 @@ async def main():
     tts_send_thread = AudioSendThread(service_manager)
     tts_send_thread.start()
 
+    # 启动主动播报线程（未启用时会空转等待）
+    notify_thread = NotifyThread(service_manager)
+    notify_thread.start()
+
     # 启动 WebSocket 服务器
     server = WebSocketServer(host="0.0.0.0", port=8000, access_token="123456", service_manager=service_manager)
     try:
@@ -30,6 +35,7 @@ async def main():
         # 停止线程
         service_manager.stop_event.set()  # 设置停止事件
         # tts_generate_thread.join()
+        notify_thread.join(timeout=5)
         tts_send_thread.join()
         logger.info("服务器已关闭。")
 

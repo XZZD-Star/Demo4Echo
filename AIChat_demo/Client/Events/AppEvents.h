@@ -13,6 +13,8 @@ enum class AppEvent {
     speaking_msg_received,
     speaking_end,
     dialogue_end,
+    notify_received,
+    notify_end,
     // Add more events here...
 };
 

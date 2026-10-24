@@ -48,6 +48,33 @@ class Settings:
     VAD_DEVICE = os.environ.get("VAD_DEVICE", "cpu").strip()
     API_TIMEOUT = int(os.environ.get("API_TIMEOUT", "10"))
 
+    # ===== 主动语音播报 =====
+    NOTIFY_ENABLED = (
+        os.environ.get("ECHOMATE_NOTIFY_ENABLED", "0").strip() == "1"
+    )
+    NOTIFY_POLL_SECONDS = float(
+        os.environ.get("ECHOMATE_NOTIFY_POLL_SECONDS", "3")
+    )
+    NOTIFY_MIN_GAP_SECONDS = int(
+        os.environ.get("ECHOMATE_NOTIFY_MIN_GAP_SECONDS", "20")
+    )
+    NOTIFY_TTL_MINUTES = int(
+        os.environ.get("ECHOMATE_NOTIFY_TTL_MINUTES", "60")
+    )
+    NOTIFY_MAX_PER_HOUR = int(
+        os.environ.get("ECHOMATE_NOTIFY_MAX_PER_HOUR", "10")
+    )
+    NOTIFY_TTS_TIMEOUT = float(
+        os.environ.get("ECHOMATE_NOTIFY_TTS_TIMEOUT", "30")
+    )
+    # 静音时段默认不启用；后续由飞书写入 app_settings 后热生效。
+    NOTIFY_QUIET_START = os.environ.get(
+        "ECHOMATE_NOTIFY_QUIET_START", ""
+    ).strip()
+    NOTIFY_QUIET_END = os.environ.get(
+        "ECHOMATE_NOTIFY_QUIET_END", ""
+    ).strip()
+
     def Set_API_Key(self, aliyun_api_key):
         # 兼容旧调用：忽略空值，避免 None 覆盖已有配置。
         if aliyun_api_key:

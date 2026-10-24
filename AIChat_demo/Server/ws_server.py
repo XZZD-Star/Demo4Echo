@@ -71,6 +71,9 @@ class WebSocketServer:
             }
             await websocket.send(json.dumps(response))
 
+            # 登记当前连接，供主动播报判断在线状态。
+            self.service_manager.client_ws = websocket
+
             # 开始接收和处理客户端消息
             async for message in websocket:
                 if isinstance(message, bytes):
@@ -90,6 +93,10 @@ class WebSocketServer:
             if process_task:
                 process_task.cancel()
             logger.info("Client disconnected")
+            # 清空连接登记与残留数据，避免影响下一次连接。
+            self.service_manager.client_ws = None
+            self.service_manager.set_client_state("unknown")
+            self.service_manager.drain_send_queues()
             self.service_manager.reset_services()
 
     async def start_server(self):
