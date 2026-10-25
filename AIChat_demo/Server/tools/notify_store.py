@@ -13,9 +13,16 @@ DB_PATH = Path("/var/lib/echomate/assistant.db")
 
 LOCAL_TZ = timezone(timedelta(hours=8))
 
-SETTING_CACHE_TTL = 60.0
+# 0 表示每次都读库：飞书改完静音/开关后下一轮轮询就生效。
+# 单用户场景下每 3 秒几次 SQLite 查询，开销可以忽略。
+SETTING_CACHE_TTL = 0.0
 _setting_cache = {}
 _setting_cache_at = 0.0
+
+# 队列上限，超出后丢弃最低优先级的旧记录。
+MAX_PENDING = 50
+# 播报文本上限，超出截断，避免一口气念一分钟。
+MAX_TEXT_LENGTH = 120
 
 
 def now_utc():
@@ -26,6 +33,13 @@ def _connect():
     conn = sqlite3.connect(str(DB_PATH), timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _shorten(text):
+    text = (text or "").strip()
+    if len(text) <= MAX_TEXT_LENGTH:
+        return text
+    return text[: MAX_TEXT_LENGTH - 6].rstrip() + "，详情见飞书"
 
 
 def init_notify_tables():
@@ -62,13 +76,48 @@ def init_notify_tables():
             """
         )
 
+        # P3 新增：客户端播放确认时间。老库需要补列。
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(notify_outbox)")
+        }
+        if "acked_at_utc" not in columns:
+            conn.execute(
+                "ALTER TABLE notify_outbox ADD COLUMN acked_at_utc TEXT"
+            )
+
+
+def _enforce_queue_cap(conn):
+    """pending 超过上限时，丢弃优先级最低且最旧的记录。"""
+    total = conn.execute(
+        "SELECT COUNT(*) AS n FROM notify_outbox WHERE status = 'pending'"
+    ).fetchone()["n"]
+
+    excess = total - MAX_PENDING
+    if excess <= 0:
+        return 0
+
+    conn.execute(
+        """
+        DELETE FROM notify_outbox
+        WHERE id IN (
+            SELECT id FROM notify_outbox
+            WHERE status = 'pending'
+            ORDER BY priority DESC, id ASC
+            LIMIT ?
+        )
+        """,
+        (excess,),
+    )
+    return excess
+
 
 def enqueue(kind, text, dedupe_key=None, priority=5, ttl_minutes=60):
     """写入一条待播报通知。dedupe_key 重复时静默忽略。
 
     返回新记录的 id；若因去重被忽略则返回 None。
     """
-    text = (text or "").strip()
+    text = _shorten(text)
     if not text:
         return None
 
@@ -91,6 +140,8 @@ def enqueue(kind, text, dedupe_key=None, priority=5, ttl_minutes=60):
         )
         if cursor.rowcount == 0:
             return None
+
+        _enforce_queue_cap(conn)
         return cursor.lastrowid
 
 
@@ -136,22 +187,46 @@ def recover_zombie(seconds=120):
         )
 
 
-def claim_one():
+def enabled_kinds():
+    """按 app_settings 的分类开关返回允许播报的 kind 列表。
+
+    未配置时默认全部开启，保持与 P0 一致的行为。
+    """
+    kinds = []
+    if get_setting("notify_todo_enabled", "1") == "1":
+        kinds.append("todo")
+    if get_setting("notify_monitor_enabled", "1") == "1":
+        kinds.extend(["alert", "recovery"])
+    kinds.append("manual")
+    return kinds
+
+
+def claim_one(kinds=None):
     """原子领取一条优先级最高的待播报通知。"""
     expire_stale()
+
+    if kinds is None:
+        kinds = enabled_kinds()
+
+    if not kinds:
+        return None
+
+    placeholders = ",".join("?" for _ in kinds)
+    current = now_utc()
 
     for _ in range(3):
         with _connect() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT id, kind, priority, text
                 FROM notify_outbox
                 WHERE status = 'pending'
+                  AND kind IN ({placeholders})
                   AND (expires_at_utc IS NULL OR expires_at_utc > ?)
                 ORDER BY priority ASC, id ASC
                 LIMIT 1
                 """,
-                (now_utc(),),
+                (*kinds, current),
             ).fetchone()
 
             if row is None:
@@ -177,40 +252,88 @@ def claim_one():
     return None
 
 
-def mark_sent(notify_id):
+def claim_batch(max_items=3, kinds=None):
+    """领取同一类型的一批通知，用于合并播报，避免连续叮咚。"""
+    first = claim_one(kinds)
+    if first is None:
+        return []
+
+    batch = [first]
+    while len(batch) < max_items:
+        row = claim_one([first["kind"]])
+        if row is None:
+            break
+        batch.append(row)
+
+    return batch
+
+
+def mark_sent(notify_ids):
+    if isinstance(notify_ids, int):
+        notify_ids = [notify_ids]
+
+    if not notify_ids:
+        return
+
+    placeholders = ",".join("?" for _ in notify_ids)
     with _connect() as conn:
         conn.execute(
-            """
+            f"""
             UPDATE notify_outbox
             SET status = 'sent', sent_at_utc = ?, last_error = NULL
-            WHERE id = ?
+            WHERE id IN ({placeholders})
             """,
-            (now_utc(), notify_id),
+            (now_utc(), *notify_ids),
         )
 
 
-def mark_failed(notify_id, error):
+def mark_failed(notify_ids, error):
+    if isinstance(notify_ids, int):
+        notify_ids = [notify_ids]
+
+    if not notify_ids:
+        return
+
     message = str(error)[:300]
+    placeholders = ",".join("?" for _ in notify_ids)
     with _connect() as conn:
         conn.execute(
-            """
+            f"""
             UPDATE notify_outbox
             SET status = 'pending',
                 claimed_at_utc = NULL,
                 attempts = attempts + 1,
                 last_error = ?
-            WHERE id = ?
+            WHERE id IN ({placeholders})
             """,
-            (message, notify_id),
+            (message, *notify_ids),
         )
         conn.execute(
-            """
+            f"""
             UPDATE notify_outbox
             SET status = 'failed'
-            WHERE id = ? AND attempts >= 3
+            WHERE id IN ({placeholders}) AND attempts >= 3
             """,
-            (notify_id,),
+            tuple(notify_ids),
         )
+
+
+def mark_acked(notify_ids):
+    """记录客户端播放确认，仅用于统计，不触发重试。"""
+    if not notify_ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in notify_ids)
+    with _connect() as conn:
+        cursor = conn.execute(
+            f"""
+            UPDATE notify_outbox
+            SET acked_at_utc = ?
+            WHERE id IN ({placeholders}) AND acked_at_utc IS NULL
+            """,
+            (now_utc(), *notify_ids),
+        )
+        return cursor.rowcount
 
 
 def pending_count():
@@ -219,6 +342,21 @@ def pending_count():
             "SELECT COUNT(*) AS n FROM notify_outbox WHERE status = 'pending'"
         ).fetchone()
     return int(row["n"]) if row else 0
+
+
+def recent_records(limit=10):
+    """返回最近的播报记录，供飞书查询。"""
+    with _connect() as conn:
+        return conn.execute(
+            """
+            SELECT id, kind, text, status, attempts,
+                   sent_at_utc, acked_at_utc, last_error
+            FROM notify_outbox
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
 
 
 def _load_settings():
@@ -294,3 +432,11 @@ def is_quiet_now():
     if start < end:
         return start <= minute_of_day < end
     return minute_of_day >= start or minute_of_day < end
+
+
+def quiet_text():
+    start = get_setting("notify_quiet_start", "")
+    end = get_setting("notify_quiet_end", "")
+    if _parse_hhmm(start) is None or _parse_hhmm(end) is None:
+        return "未启用"
+    return f"{start} - {end}（北京时间）"

@@ -51,6 +51,10 @@ class WebSocketServer:
         logger.info("Client connected")
         process_task = None
         try:
+            # 新连接开始前清掉上一条连接可能残留的音频/文本帧，
+            # 避免把旧回复推给刚连上的客户端。
+            self.service_manager.drain_send_queues()
+
             # 启动发送队列处理任务
             process_task = asyncio.create_task(self.process_send_queue(websocket))
 

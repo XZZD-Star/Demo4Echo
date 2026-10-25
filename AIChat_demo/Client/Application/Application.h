@@ -11,6 +11,8 @@
 #include <thread>
 #include <atomic>
 #include <string>
+#include <vector>
+#include <mutex>
 
 class Application {
 public:
@@ -67,6 +69,16 @@ public:
     void set_notify_id(int id) { notify_id_ = id; }
     int get_notify_id() const { return notify_id_; }
 
+    // 服务端合并播报时可能一次带多条 id，用于回 ACK。
+    void set_notify_ids(const std::vector<int>& ids) {
+        std::lock_guard<std::mutex> lock(notify_ids_mutex_);
+        notify_ids_ = ids;
+    }
+    std::vector<int> get_notify_ids() {
+        std::lock_guard<std::mutex> lock(notify_ids_mutex_);
+        return notify_ids_;
+    }
+
     void set_first_tts_audio_received(bool flag) {
         first_tts_audio_received_ = flag;
     }
@@ -101,6 +113,8 @@ private:
     std::atomic<bool> notify_mode_{false};
     std::atomic<int> notify_id_{0};
     std::atomic<bool> first_tts_audio_received_{false};
+    std::vector<int> notify_ids_;
+    mutable std::mutex notify_ids_mutex_;
     // 原子变量用于通知线程退出
     std::atomic<bool> threads_stop_flag_ = false;
     std::thread ws_msg_thread_;

@@ -54,6 +54,21 @@ void SpeakingState::Run(Application* app) {
                 } else {
                     USER_LOG_INFO("Notify playback end.");
                 }
+
+                // 回播放确认，仅用于服务端统计，不触发重试。
+                auto notify_ids = app->get_notify_ids();
+                if(!notify_ids.empty()) {
+                    std::string ack = "{\"type\":\"notify_ack\",\"ids\":[";
+                    for(size_t i = 0; i < notify_ids.size(); ++i) {
+                        if(i > 0) ack += ",";
+                        ack += std::to_string(notify_ids[i]);
+                    }
+                    ack += stuck ? "],\"status\":\"timeout\"}"
+                               : "],\"status\":\"played\"}";
+                    app->ws_client_.SendText(ack);
+                    USER_LOG_INFO("Notify ACK sent: %s", ack.c_str());
+                }
+                app->set_notify_ids({});
                 app->set_notify_mode(false);
                 app->set_notify_id(0);
                 app->set_tts_completed(false);

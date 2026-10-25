@@ -1,6 +1,7 @@
 from service_manager import ServiceManager
 from tools.logger import logger
 from tools.registry import global_registry
+from tools import notify_store
 
 class TextHandler:
     def __init__(self, service_manager: ServiceManager):
@@ -30,6 +31,24 @@ class TextHandler:
                 logger.error("functions 字段必须是一个列表")
                 return {"type": "error", "message": "Invalid functions format"}
             self.handle_register_functions(functions)
+
+        elif data.get('type') == 'notify_ack':
+            # 客户端播放确认，仅用于统计，不触发重试。
+            ids = data.get('ids')
+            if not isinstance(ids, list):
+                single = data.get('id')
+                ids = [single] if isinstance(single, int) else []
+
+            clean_ids = [i for i in ids if isinstance(i, int)]
+            if clean_ids:
+                try:
+                    updated = notify_store.mark_acked(clean_ids)
+                    logger.info(
+                        "收到播放确认 %s，更新 %d 条。",
+                        clean_ids, updated,
+                    )
+                except Exception as exc:
+                    logger.warning("记录播放确认失败：%s", exc)
 
         elif data.get('type') == 'state':
             # client 端 idle 信息

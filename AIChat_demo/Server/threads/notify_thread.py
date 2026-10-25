@@ -1,6 +1,6 @@
 """主动播报调度线程。
 
-职责：在客户端在线且空闲时，从 notify_outbox 领取一条通知，
+职责：在客户端在线且空闲时，从 notify_outbox 领取通知，
 先下发 notify JSON，再推送 TTS 音频，最后补一个 tts end 消息。
 """
 
@@ -104,6 +104,17 @@ class NotifyThread(threading.Thread):
 
         return True
 
+    # ---------- 合并播报 ----------
+
+    @staticmethod
+    def _merge_text(rows):
+        """多条同类通知合并成一句，避免连续叮咚。"""
+        if len(rows) == 1:
+            return rows[0]["text"]
+
+        first = rows[0]["text"]
+        return f"你有 {len(rows)} 条提醒。第一条：{first}"
+
     # ---------- 播放流程 ----------
 
     def _wait_audio_idle(self, timeout=2.0):
@@ -114,13 +125,16 @@ class NotifyThread(threading.Thread):
             time.sleep(0.05)
         return False
 
-    def _play(self, row):
+    def _play(self, rows):
         manager = self.service_manager
-        notify_id = row["id"]
+        notify_ids = [row["id"] for row in rows]
+        notify_id = notify_ids[0]
+        kind = rows[0]["kind"]
+        text = self._merge_text(rows)
 
         if not self._wait_audio_idle():
             logger.warning("播放队列未清空，延后播报通知 #%s。", notify_id)
-            notify_store.mark_failed(notify_id, "audio queue busy")
+            notify_store.mark_failed(notify_ids, "audio queue busy")
             return False
 
         self._buffer.clear()
@@ -131,28 +145,30 @@ class NotifyThread(threading.Thread):
             payload = {
                 "type": "notify",
                 "id": notify_id,
-                "kind": row["kind"],
-                "text": row["text"],
+                "ids": notify_ids,
+                "kind": kind,
+                "text": text,
             }
             manager.ws_send_queue.put(
                 json.dumps(payload, ensure_ascii=False)
             )
             logger.info(
-                "开始播报通知 #%s（%s）：%s",
-                notify_id,
-                row["kind"],
-                row["text"],
+                "开始播报通知 %s（%s，%d 条）：%s",
+                notify_ids,
+                kind,
+                len(rows),
+                text,
             )
 
             ok = self.notify_service.speak(
-                row["text"],
+                text,
                 timeout_seconds=global_settings.NOTIFY_TTS_TIMEOUT,
             )
 
             self._flush_buffer()
 
             if not ok:
-                notify_store.mark_failed(notify_id, "tts failed")
+                notify_store.mark_failed(notify_ids, "tts failed")
                 return False
 
             # 等音频队列排空后再发结束标记，保证顺序。
@@ -161,15 +177,15 @@ class NotifyThread(threading.Thread):
                 json.dumps({"type": "tts", "state": "end"})
             )
 
-            notify_store.mark_sent(notify_id)
+            notify_store.mark_sent(notify_ids)
             self._hour_count += 1
             self._last_play_at = time.monotonic()
-            logger.info("通知 #%s 播报完成。", notify_id)
+            logger.info("通知 %s 播报完成。", notify_ids)
             return True
 
         except Exception as exc:
-            logger.exception("播报通知 #%s 异常：%s", notify_id, exc)
-            notify_store.mark_failed(notify_id, exc)
+            logger.exception("播报通知 %s 异常：%s", notify_ids, exc)
+            notify_store.mark_failed(notify_ids, exc)
             return False
 
         finally:
@@ -180,14 +196,20 @@ class NotifyThread(threading.Thread):
 
     def run(self):
         logger.info(
-            "主动播报线程已启动（启用=%s，轮询=%s 秒）。",
+            "主动播报线程已启动（启用=%s，轮询=%s 秒，静音=%s）。",
             global_settings.NOTIFY_ENABLED,
             global_settings.NOTIFY_POLL_SECONDS,
+            notify_store.quiet_text(),
         )
 
         try:
             notify_store.init_notify_tables()
             notify_store.recover_zombie()
+            logger.info(
+                "播报队列待处理 %d 条，允许类型 %s。",
+                notify_store.pending_count(),
+                notify_store.enabled_kinds(),
+            )
         except Exception as exc:
             logger.error("初始化通知表失败：%s", exc)
 
@@ -197,12 +219,12 @@ class NotifyThread(threading.Thread):
                     time.sleep(global_settings.NOTIFY_POLL_SECONDS)
                     continue
 
-                row = notify_store.claim_one()
-                if row is None:
+                rows = notify_store.claim_batch(max_items=3)
+                if not rows:
                     time.sleep(global_settings.NOTIFY_POLL_SECONDS)
                     continue
 
-                self._play(row)
+                self._play(rows)
 
             except Exception as exc:
                 logger.exception("播报线程异常：%s", exc)

@@ -138,6 +138,18 @@ void WSHandler::handle_notify_message(const Json::Value& root, Application* app)
 
     app->set_notify_mode(true);
     app->set_notify_id(id.isInt() ? id.asInt() : 0);
+
+    std::vector<int> ids;
+    const Json::Value id_list = root["ids"];
+    if (id_list.isArray()) {
+        for (const auto& item : id_list) {
+            if (item.isInt()) ids.push_back(item.asInt());
+        }
+    }
+    if (ids.empty() && id.isInt()) {
+        ids.push_back(id.asInt());
+    }
+    app->set_notify_ids(ids);
     // 通知音频不能触发对话流程的 speaking_msg_received。
     app->set_first_audio_msg_received(false);
     app->set_first_tts_audio_received(false);
