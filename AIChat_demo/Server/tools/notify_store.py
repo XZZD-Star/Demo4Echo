@@ -6,6 +6,7 @@
 
 import sqlite3
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -29,10 +30,19 @@ def now_utc():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+@contextmanager
 def _connect():
-    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    """连接用完必须关闭，否则 WAL 下会不断累积句柄并导致 database is locked。"""
+    conn = sqlite3.connect(str(DB_PATH), timeout=15)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _shorten(text):
