@@ -65,7 +65,11 @@ class LLMModel:
                 message = response["output"]["choices"][0]["message"]
                 tool_calls = message.get("tool_calls") or []
                 if tool_calls:
-                    return self._run_tool_calls(tool_calls)
+                    return self._run_tool_calls(
+                        tool_calls,
+                        owner_id="ou_1359f562d0a768f91232760499bc1cc0",
+                        source="deskbot",
+                    )
                 content = message.get("content") or ""
                 self.add_message("assistant", content)
                 return content
@@ -77,14 +81,15 @@ class LLMModel:
             return "抱歉，我暂时无法处理您的请求。"
 
 
-    def _run_tool_calls(self, tool_calls):
+    def _run_tool_calls(self, tool_calls, owner_id, source, chat_id=""):
         results = []
         for call in tool_calls:
             function = call.get("function") or {}
             name = function.get("name", "")
             arguments = function.get("arguments", "{}")
             result = assistant_actions.execute_tool_call(
-                name, arguments, owner_id="ou_1359f562d0a768f91232760499bc1cc0", source="deskbot"
+                name, arguments, owner_id=owner_id, source=source,
+                chat_id=chat_id,
             )
             results.append(result)
         return results

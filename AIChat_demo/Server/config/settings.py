@@ -48,6 +48,9 @@ class Settings:
     ASR_DEVICE = os.environ.get("ASR_DEVICE", "cpu").strip()
     VAD_DEVICE = os.environ.get("VAD_DEVICE", "cpu").strip()
     API_TIMEOUT = int(os.environ.get("API_TIMEOUT", "10"))
+    FEISHU_CHAT_ID = os.environ.get(
+        "ECHOMATE_FEISHU_CHAT_ID", ""
+    ).strip()
 
     # ===== 主动语音播报 =====
     NOTIFY_ENABLED = (

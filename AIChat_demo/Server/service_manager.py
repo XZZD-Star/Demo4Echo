@@ -1,3 +1,4 @@
+from config.settings import global_settings
 from services.chat_service import ChatService
 from services.tts_service import TTSService
 from tools.registry import global_registry
@@ -61,6 +62,7 @@ class ServiceManager:
         self.conversation_busy = threading.Event()  # 对话/识别占用中
         self.notify_playing = False         # 正在播报通知
         self.owner_id = "ou_1359f562d0a768f91232760499bc1cc0"  # Shared Feishu owner
+        self.feishu_chat_id = global_settings.FEISHU_CHAT_ID
 
         def continue_chat():
             return "继续聊天..."
@@ -206,47 +208,53 @@ class ServiceManager:
         # 对话期间标记占用，主动播报会让路。
         self.conversation_busy.set()
         try:
-            # Explicit reminder commands are deterministic and must not
-            # depend on an LLM returning a tool call.
-            todo_result = None
-            if any(word in text for word in ("提醒我", "别忘了", "记得提醒")):
-                todo_result = assistant_actions.create_todo_from_text(
-                    owner_id=self.owner_id,
-                    text=text,
-                    source="deskbot",
-                    notify_deskbot=True,
-                    notify_feishu=True,
-                )
-
-            # 1.进行意图识别
+            # 1.进行意图识别。语义理解交给模型，不再用关键词预判待办。
             function_calls = self.intent_service.detect_intent(text)
             history_list = []
-            if todo_result and todo_result.get("ok"):
-                history_list.append(
-                    {"role": "user", "content": f"系统已创建待办：{todo_result}"}
-                )
+            todo_result = None
+            todo_error = None
             # 2.执行函数调用（如果有）
             for function_call in function_calls:
-                if "function_call" in function_call and "name" in function_call["function_call"]:
-                    logger.info(f"[准备调用] {function_call}")
-                    # 执行函数调用
-                    if function_call["function_call"]["name"] == "continue_chat":
-                        # 继续聊天意图
-                        pass
-                    elif function_call["function_call"]["name"] == "exit_chat":
-                        # 结束对话意图
-                        response =  {
-                                "type": "chat",
-                                "dialogue": "end"
-                        }
-                        self.ws_send_queue.put(json.dumps(response))
-                    else:
-                        # 其他函数调用, 发送到Client端, Client自己处理
-                        self.ws_send_queue.put(json.dumps(function_call))
-                        history_list.append([
-                            {"role": "user", "content": f"函数调用: {function_call}"},
-                            {"role": "assistant", "content": f"函数调用完成"}
-                        ])
+                if "function_call" not in function_call:
+                    continue
+                call = function_call["function_call"]
+                if "name" not in call:
+                    continue
+                logger.info(f"[准备调用] {function_call}")
+                # 执行函数调用
+                if call["name"] == "continue_chat":
+                    # 继续聊天意图
+                    continue
+                if call["name"] == "exit_chat":
+                    response = {
+                        "type": "chat",
+                        "dialogue": "end"
+                    }
+                    self.ws_send_queue.put(json.dumps(response))
+                    continue
+                # 共享工具由服务端执行；结果必须反馈给聊天模型。
+                name = call["name"]
+                arguments = call.get("arguments", {})
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {}
+                result = assistant_actions.execute_tool_call(
+                    name,
+                    json.dumps(arguments, ensure_ascii=False),
+                    owner_id=self.owner_id,
+                    source="deskbot",
+                    chat_id=self.feishu_chat_id,
+                )
+                if name == "add_todo":
+                    todo_result = result
+                    if not result.get("ok"):
+                        todo_error = result.get("error", "unknown")
+                history_list.append({
+                    "role": "user",
+                    "content": f"工具 {name} 执行结果：{result}",
+                })
             # 3.调用聊天服务生成文字
             answers = self.chat_service.generate_chat_response(
                 text,
@@ -257,6 +265,20 @@ class ServiceManager:
             if answers == -1:
                 logger.error("LLM 生成失败")
                 return -1
+            if todo_error:
+                reply = {
+                    "past_due": "这个时间已经过去了，我没有创建待办。请给我一个之后的时间。",
+                    "bad_due": "我没有识别出有效时间，待办没有创建。",
+                    "empty": "待办内容不能为空。",
+                    "too_long": "待办内容太长了。",
+                }.get(todo_error, "待办没有创建成功，请换个说法再试一次。")
+                self.ws_send_queue.put(
+                    json.dumps(
+                        {"type": "chat", "dialogue": reply},
+                        ensure_ascii=False,
+                    )
+                )
+                return
             if isinstance(answers, list):
                 # Tool-only response: confirm the resulting shared action.
                 ok_items = [x for x in answers if x.get("ok")]

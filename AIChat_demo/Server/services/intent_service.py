@@ -1,5 +1,7 @@
 from typing import Dict, Any, List
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from config.settings import global_settings
 from tools.registry import FunctionRegistry
 from tools.logger import logger
@@ -19,8 +21,12 @@ class IntentService:
             ensure_ascii=False,
             indent=2
         )
+        current_time = datetime.now(
+            ZoneInfo("Asia/Shanghai")
+        ).strftime("%Y-%m-%d %H:%M %A")
         return (
             "你是一个带意图识别的语音助手。请分析用户的最后一句话，判断用户意图属于以下哪一类：\n"
+            f"当前北京时间：{current_time}\n"
             "以下面这个注册的工具列表为准:\n"
             "<start>\n"
             "工具列表:\n"
@@ -31,6 +37,10 @@ class IntentService:
             "- 如果有多个意图， 请返回一个包含多个函数调用的JSON数组, \n"
             "- 注意不要重复意图了，例如说再见拜拜晚安这种重复的语句实际只有1个意图，但你不要返回3个exit_chat的function_call诸如此类\n"
             "- 如果没有明确意图，则返回{'function_call': {'name': 'continue_chat'}}\n"
+            "- 你负责理解用户语义，不要依赖固定关键词；自然语言表达提醒、安排、待办时调用 add_todo\n"
+            "- add_todo 的 due_at 必须是带时区的 ISO 8601 时间；结合当前北京时间解析今天、明天、下午、晚上等表达\n"
+            "- 如果时间缺少上午/下午且无法唯一确定，不要猜，返回 continue_chat，让聊天模型向用户澄清\n"
+            "- 只能返回 function_call，绝不能直接返回工具执行结果、ok 或 error 字段\n"
             "- 不要添加任何额外说明\n"
             "示例分析:\n"
             "```\n"
