@@ -293,4 +293,13 @@ void ui_init(void)
     }
     lv_lib_pm_OpenPage(&page_manager, NULL, "HomePage");
     lv_timer_create(_maintimer_cb, 1000, NULL);
+
+    if(start_ai_chat(ui_system_para.aichat_app_info.addr, ui_system_para.aichat_app_info.port,
+                     ui_system_para.aichat_app_info.token, ui_system_para.aichat_app_info.device_id,
+                     ui_system_para.aichat_app_info.aliyun_api_key, ui_system_para.aichat_app_info.protocol_version,
+                     ui_system_para.aichat_app_info.sample_rate, ui_system_para.aichat_app_info.channels,
+                     ui_system_para.aichat_app_info.frame_duration) != 0)
+    {
+        LV_LOG_ERROR("AIChat app startup failed.");
+    }
 }

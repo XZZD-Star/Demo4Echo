@@ -7,6 +7,7 @@
 static void* app_instance = NULL; // AI Chat 应用实例
 static pthread_t ai_chat_thread;  // 线程 ID
 static volatile int is_running = 0; // 标志位，表示应用是否正在运行
+uint8_t chat_bot_move_dir = 0;
 
 
 void* ai_chat_thread_func(void* arg) {
@@ -75,7 +76,6 @@ int get_ai_chat_state(void) {
 void chat_bot_get_intent_process()
 {
     IntentData intent_data;
-    uint8_t chat_bot_move_dir = 0;
     if (get_aichat_app_intent(app_instance, &intent_data)) {
         // 打印 function_name 和 arguments
         printf("Function Name: %s\n", intent_data.function_name);

@@ -6,6 +6,7 @@ extern "C" {
 #endif
 
 #include "../../ui.h"
+#include "app_ChatBotPage.h"
 
 void ui_ChatBotPage_init(void);
 void ui_ChatBotPage_deinit(void);
