@@ -3,6 +3,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 import dashscope
+from echomate_credentials import credential
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(SERVER_DIR / ".env", override=False)
@@ -12,7 +13,7 @@ class Settings:
     protocol_version = 2
 
     # 所有云端服务使用同一个服务端 API Key
-    DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+    DASHSCOPE_API_KEY = credential("dashscope_api_key")
 
     # ASR 配置
     ECHOMATE_ASR_BACKEND = os.environ.get(
