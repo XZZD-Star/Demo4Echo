@@ -1,6 +1,7 @@
 import dashscope
 from tools.logger import logger
 from config.settings import global_settings
+from services import assistant_actions
 
 class LLMModel:
     def __init__(self, model_name: str = "qwen-turbo"):
@@ -52,6 +53,8 @@ class LLMModel:
                 api_key=global_settings.DASHSCOPE_API_KEY,
                 model=self.model_name,
                 messages=self.messages,
+                tools=assistant_actions.ASSISTANT_TOOLS,
+                tool_choice="auto",
                 result_format='message',
                 stream=False,
                 incremental_output=False,
@@ -59,7 +62,11 @@ class LLMModel:
             )
 
             if response["status_code"] == 200:
-                content = response["output"]["choices"][0]["message"]["content"]
+                message = response["output"]["choices"][0]["message"]
+                tool_calls = message.get("tool_calls") or []
+                if tool_calls:
+                    return self._run_tool_calls(tool_calls)
+                content = message.get("content") or ""
                 self.add_message("assistant", content)
                 return content
             else:
@@ -69,6 +76,18 @@ class LLMModel:
             logger.error(f"非流式生成异常: {str(e)}")
             return "抱歉，我暂时无法处理您的请求。"
 
+
+    def _run_tool_calls(self, tool_calls):
+        results = []
+        for call in tool_calls:
+            function = call.get("function") or {}
+            name = function.get("name", "")
+            arguments = function.get("arguments", "{}")
+            result = assistant_actions.execute_tool_call(
+                name, arguments, owner_id="ou_1359f562d0a768f91232760499bc1cc0", source="deskbot"
+            )
+            results.append(result)
+        return results
 
     def get_LLM_response_stream(self, question):
         """获取百炼对话回答\r\n

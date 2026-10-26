@@ -11,6 +11,7 @@ import time
 from config.settings import global_settings
 from service_manager import ServiceManager
 from services.notify_service import NotifyService
+from services.reminder_service import DeskbotReminderService
 from tools import notify_store
 from tools.logger import logger
 
@@ -35,6 +36,7 @@ class NotifyThread(threading.Thread):
         self._last_play_at = 0.0
         self._hour_window_start = 0.0
         self._hour_count = 0
+        self.reminder_service = DeskbotReminderService()
 
     # ---------- 音频缓冲 ----------
 
@@ -215,6 +217,10 @@ class NotifyThread(threading.Thread):
 
         while not self.service_manager.stop_event.is_set():
             try:
+                # Pull due todos into independent deskbot/feishu deliveries.
+                # This remains safe when the Feishu process is unavailable.
+                self.reminder_service.poll_once()
+
                 if not self._can_play():
                     time.sleep(global_settings.NOTIFY_POLL_SECONDS)
                     continue

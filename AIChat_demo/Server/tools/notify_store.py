@@ -329,21 +329,56 @@ def mark_failed(notify_ids, error):
 
 
 def mark_acked(notify_ids):
-    """记录客户端播放确认，仅用于统计，不触发重试。"""
+    """Record client ACK and close the matching shared reminder delivery."""
     if not notify_ids:
         return 0
 
+    acked_at = now_utc()
     placeholders = ",".join("?" for _ in notify_ids)
     with _connect() as conn:
+        # Delivery IDs are encoded in dedupe_key for todo reminders.
+        rows = conn.execute(
+            f"""
+            SELECT dedupe_key FROM notify_outbox
+            WHERE id IN ({placeholders})
+              AND dedupe_key LIKE 'todo-delivery:%'
+            """,
+            tuple(notify_ids),
+        ).fetchall()
+        for row in rows:
+            try:
+                delivery_id = int(row["dedupe_key"].split(":", 1)[1])
+            except (TypeError, ValueError):
+                continue
+            try:
+                import echomate_store
+                echomate_store.acknowledge_delivery(delivery_id)
+            except Exception:
+                # ACK bookkeeping must not break the deskbot playback flow.
+                pass
+
         cursor = conn.execute(
             f"""
             UPDATE notify_outbox
             SET acked_at_utc = ?
             WHERE id IN ({placeholders}) AND acked_at_utc IS NULL
             """,
-            (now_utc(), *notify_ids),
+            (acked_at, *notify_ids),
         )
         return cursor.rowcount
+
+
+def find_by_dedupe_key(dedupe_key):
+    """Return a notification by dedupe key, or None."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, kind, text, status, sent_at_utc, acked_at_utc
+            FROM notify_outbox WHERE dedupe_key = ?
+            """,
+            (dedupe_key,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def pending_count():

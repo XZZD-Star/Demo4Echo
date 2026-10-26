@@ -2,6 +2,7 @@ from services.chat_service import ChatService
 from services.tts_service import TTSService
 from tools.registry import global_registry
 from services.intent_service import IntentService
+from services import assistant_actions
 from tools.audio_processor import AudioProcessor
 from threads.task_manager import TaskManager
 from tools.logger import logger
@@ -59,6 +60,7 @@ class ServiceManager:
         self.client_state = "unknown"       # 客户端上报的状态
         self.conversation_busy = threading.Event()  # 对话/识别占用中
         self.notify_playing = False         # 正在播报通知
+        self.owner_id = "ou_1359f562d0a768f91232760499bc1cc0"  # Shared Feishu owner
 
         def continue_chat():
             return "继续聊天..."
@@ -204,9 +206,25 @@ class ServiceManager:
         # 对话期间标记占用，主动播报会让路。
         self.conversation_busy.set()
         try:
+            # Explicit reminder commands are deterministic and must not
+            # depend on an LLM returning a tool call.
+            todo_result = None
+            if any(word in text for word in ("提醒我", "别忘了", "记得提醒")):
+                todo_result = assistant_actions.create_todo_from_text(
+                    owner_id=self.owner_id,
+                    text=text,
+                    source="deskbot",
+                    notify_deskbot=True,
+                    notify_feishu=True,
+                )
+
             # 1.进行意图识别
             function_calls = self.intent_service.detect_intent(text)
             history_list = []
+            if todo_result and todo_result.get("ok"):
+                history_list.append(
+                    {"role": "user", "content": f"系统已创建待办：{todo_result}"}
+                )
             # 2.执行函数调用（如果有）
             for function_call in function_calls:
                 if "function_call" in function_call and "name" in function_call["function_call"]:
@@ -230,10 +248,31 @@ class ServiceManager:
                             {"role": "assistant", "content": f"函数调用完成"}
                         ])
             # 3.调用聊天服务生成文字
-            answers = self.chat_service.generate_chat_response(text, history=history_list, is_stream=True)
+            answers = self.chat_service.generate_chat_response(
+                text,
+                history=history_list,
+                is_stream=True,
+                owner_id=self.owner_id,
+            )
             if answers == -1:
                 logger.error("LLM 生成失败")
                 return -1
+            if isinstance(answers, list):
+                # Tool-only response: confirm the resulting shared action.
+                ok_items = [x for x in answers if x.get("ok")]
+                if todo_result and todo_result.get("ok"):
+                    reply = (
+                        f"好的，已添加待办：{todo_result['title']}，"
+                        f"{todo_result['due_text']} 提醒你。"
+                    )
+                elif ok_items:
+                    reply = "已经处理好了。"
+                else:
+                    reply = "这件事没有处理成功，请再说一次。"
+                self.ws_send_queue.put(
+                    json.dumps({"type": "chat", "dialogue": reply}, ensure_ascii=False)
+                )
+                return
             logger.info(f"[回复]: ")
             # 4.将生成的文字放入 TTS任务队列
             # for ans_chunk in answers:
