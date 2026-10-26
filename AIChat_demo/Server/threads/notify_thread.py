@@ -114,8 +114,20 @@ class NotifyThread(threading.Thread):
         if len(rows) == 1:
             return rows[0]["text"]
 
-        first = rows[0]["text"]
-        return f"你有 {len(rows)} 条提醒。第一条：{first}"
+        prefix = f"你有 {len(rows)} 条提醒。"
+        max_chars = 300
+        parts = []
+        used = len(prefix)
+        for index, row in enumerate(rows, 1):
+            item = f"第{index}条：{row['text']}。"
+            if used + len(item) > max_chars:
+                if not parts:
+                    parts.append(item)
+                parts.append("后面的提醒已省略。")
+                break
+            parts.append(item)
+            used += len(item)
+        return prefix + "".join(parts)
 
     # ---------- 播放流程 ----------
 
