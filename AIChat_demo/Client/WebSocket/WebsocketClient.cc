@@ -81,12 +81,32 @@ void WebSocketClient::Close() {
 
 // 发送文本消息
 void WebSocketClient::SendText(const std::string& message) {
-    ws_client_.send(connection_hdl_, message, websocketpp::frame::opcode::text);
+    if (!is_connected_) {
+        USER_LOG_WARN("SendText ignored: not connected.");
+        return;
+    }
+    try {
+        ws_client_.send(connection_hdl_, message, websocketpp::frame::opcode::text);
+    } catch (const websocketpp::exception& e) {
+        USER_LOG_ERROR("SendText failed: %s", e.what());
+        is_connected_ = false;
+        if (on_close_) on_close_();
+    }
 }
 
 // 发送二进制数据
 void WebSocketClient::SendBinary(const uint8_t* data, size_t size) {
-    ws_client_.send(connection_hdl_, data, size, websocketpp::frame::opcode::binary);
+    if (!is_connected_) {
+        USER_LOG_WARN("SendBinary ignored: not connected.");
+        return;
+    }
+    try {
+        ws_client_.send(connection_hdl_, data, size, websocketpp::frame::opcode::binary);
+    } catch (const websocketpp::exception& e) {
+        USER_LOG_ERROR("SendBinary failed: %s", e.what());
+        is_connected_ = false;
+        if (on_close_) on_close_();
+    }
 }
 
 // 设置消息回调
