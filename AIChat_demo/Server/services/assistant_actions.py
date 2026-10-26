@@ -73,6 +73,31 @@ def _parse_local_datetime(text):
     return dt.astimezone(LOCAL_TZ)
 
 
+def format_due_speech(due, now=None):
+    """Format a due datetime for Chinese speech without relying on the LLM."""
+    due = due.astimezone(LOCAL_TZ)
+    now = (now or datetime.now(LOCAL_TZ)).astimezone(LOCAL_TZ)
+    days = (due.date() - now.date()).days
+    day_text = {0: "今天", 1: "明天", 2: "后天"}.get(days)
+    if day_text is None:
+        day_text = f"{due.month}月{due.day}日"
+
+    period = "凌晨"
+    if 6 <= due.hour < 12:
+        period = "上午"
+    elif 12 <= due.hour < 14:
+        period = "中午"
+    elif 14 <= due.hour < 18:
+        period = "下午"
+    elif due.hour >= 18:
+        period = "晚上"
+
+    hour = due.hour % 12 or 12
+    if due.minute:
+        return f"{day_text}{period}{hour}点{due.minute}分"
+    return f"{day_text}{period}{hour}点"
+
+
 CHINESE_DIGITS = {
     "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3,
     "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
@@ -227,6 +252,7 @@ def create_todo_from_text(owner_id, text, source="deskbot", chat_id="",
         "title": title,
         "due_local": due.isoformat(timespec="minutes"),
         "due_text": due.strftime("%Y-%m-%d %H:%M"),
+        "due_speech": format_due_speech(due),
     }
 
 
@@ -266,6 +292,7 @@ def execute_tool_call(name, arguments, owner_id, source, chat_id=""):
             "todo_id": todo_id,
             "title": title,
             "due_text": due.strftime("%Y-%m-%d %H:%M"),
+            "due_speech": format_due_speech(due),
         }
 
     if name == "propose_memory":

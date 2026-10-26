@@ -199,6 +199,23 @@ class ServiceManager:
         }
         self.ws_send_queue.put(json.dumps(msg))
 
+    def _speak_reply(self, text):
+        """Send a final reply through the existing TTS stream."""
+        text = (text or "").strip()
+        if not text:
+            text = "抱歉，这次没有生成有效回复，请再说一次。"
+        try:
+            self.tts_service.tts_speech_stream(text)
+            self.tts_service.tts_close()
+        except Exception:
+            logger.exception("对话回复 TTS 失败")
+
+    def _finish_chat_reply(self):
+        """Mark the end of this chat turn after TTS completion."""
+        self.ws_send_queue.put(
+            json.dumps({"type": "chat", "dialogue": "end"})
+        )
+
     def chat_start_task(self, text):
         """
         处理识别到的文本，进行对话
@@ -226,11 +243,6 @@ class ServiceManager:
                     # 继续聊天意图
                     continue
                 if call["name"] == "exit_chat":
-                    response = {
-                        "type": "chat",
-                        "dialogue": "end"
-                    }
-                    self.ws_send_queue.put(json.dumps(response))
                     continue
                 # 共享工具由服务端执行；结果必须反馈给聊天模型。
                 name = call["name"]
@@ -264,7 +276,9 @@ class ServiceManager:
             )
             if answers == -1:
                 logger.error("LLM 生成失败")
-                return -1
+                self._speak_reply("抱歉，我暂时无法处理这个请求，请稍后再试。")
+                self._finish_chat_reply()
+                return
             if todo_error:
                 reply = {
                     "past_due": "这个时间已经过去了，我没有创建待办。请给我一个之后的时间。",
@@ -272,12 +286,8 @@ class ServiceManager:
                     "empty": "待办内容不能为空。",
                     "too_long": "待办内容太长了。",
                 }.get(todo_error, "待办没有创建成功，请换个说法再试一次。")
-                self.ws_send_queue.put(
-                    json.dumps(
-                        {"type": "chat", "dialogue": reply},
-                        ensure_ascii=False,
-                    )
-                )
+                self._speak_reply(reply)
+                self._finish_chat_reply()
                 return
             if isinstance(answers, list):
                 # Tool-only response: confirm the resulting shared action.
@@ -285,29 +295,20 @@ class ServiceManager:
                 if todo_result and todo_result.get("ok"):
                     reply = (
                         f"好的，已添加待办：{todo_result['title']}，"
-                        f"{todo_result['due_text']} 提醒你。"
+                        f"{todo_result.get('due_speech') or todo_result['due_text']} 提醒你。"
                     )
                 elif ok_items:
                     reply = "已经处理好了。"
                 else:
                     reply = "这件事没有处理成功，请再说一次。"
-                self.ws_send_queue.put(
-                    json.dumps({"type": "chat", "dialogue": reply}, ensure_ascii=False)
-                )
+                self._speak_reply(reply)
+                self._finish_chat_reply()
                 return
-            logger.info(f"[回复]: ")
-            # 4.将生成的文字放入 TTS任务队列
-            # for ans_chunk in answers:
-            #     print(ans_chunk, end="", flush=True)
-            #     service_manager.tts_text_queue.put(ans_chunk)
-
-            # 4.直接TTS生成
-            for text_chunk in answers:
-                print(text_chunk, end="", flush=True)
-                # 调用 TTS 服务进行语音合成
-                self.tts_service.tts_speech_stream(text_chunk)
-            print()  # 换行
-            # 关闭 TTS 流
-            self.tts_service.tts_close()
+            reply = "".join(
+                chunk for chunk in answers if isinstance(chunk, str)
+            ).strip()
+            logger.info("[回复]: %s", reply)
+            self._speak_reply(reply)
+            self._finish_chat_reply()
         finally:
             self.conversation_busy.clear()

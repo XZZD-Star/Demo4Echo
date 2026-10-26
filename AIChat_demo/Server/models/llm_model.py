@@ -80,6 +80,36 @@ class LLMModel:
             logger.error(f"非流式生成异常: {str(e)}")
             return "抱歉，我暂时无法处理您的请求。"
 
+    def get_text_response(self, question: str) -> str:
+        """纯文本推理，不注册也不执行任何工具。"""
+        if question:
+            self.add_message("user", question)
+
+        try:
+            response = dashscope.Generation.call(
+                api_key=global_settings.DASHSCOPE_API_KEY,
+                model=self.model_name,
+                messages=self.messages,
+                result_format="message",
+                stream=False,
+                incremental_output=False,
+                enable_search=True,
+            )
+
+            if response["status_code"] == 200:
+                message = response["output"]["choices"][0]["message"]
+                content = message.get("content") or ""
+                self.add_message("assistant", content)
+                return content
+
+            logger.error(
+                "纯文本推理失败，状态码: %s",
+                response["status_code"],
+            )
+        except Exception as exc:
+            logger.error("纯文本推理异常: %s", exc)
+        return ""
+
 
     def _run_tool_calls(self, tool_calls, owner_id, source, chat_id=""):
         results = []

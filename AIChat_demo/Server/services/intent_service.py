@@ -86,7 +86,7 @@ class IntentService:
         self.intent_llm_model.add_message("user", user_input)
 
         try:
-            response = self.intent_llm_model.get_LLM_response(user_input)
+            response = self.intent_llm_model.get_text_response(user_input)
             # 如果有 ```json ``` 包裹，去掉它
             if isinstance(response, str):
                 if response.startswith("```json"):

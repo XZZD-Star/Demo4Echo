@@ -328,6 +328,28 @@ def mark_failed(notify_ids, error):
         )
 
 
+def mark_pending(notify_ids, reason=""):
+    """Return claimed notifications to pending without consuming retries."""
+    if isinstance(notify_ids, int):
+        notify_ids = [notify_ids]
+
+    if not notify_ids:
+        return
+
+    placeholders = ",".join("?" for _ in notify_ids)
+    with _connect() as conn:
+        conn.execute(
+            f"""
+            UPDATE notify_outbox
+            SET status = 'pending',
+                claimed_at_utc = NULL,
+                last_error = ?
+            WHERE id IN ({placeholders})
+            """,
+            (str(reason)[:300], *notify_ids),
+        )
+
+
 def mark_acked(notify_ids):
     """Record client ACK and close the matching shared reminder delivery."""
     if not notify_ids:

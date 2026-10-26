@@ -148,7 +148,7 @@ class NotifyThread(threading.Thread):
 
         if not self._wait_audio_idle():
             logger.warning("播放队列未清空，延后播报通知 #%s。", notify_id)
-            notify_store.mark_failed(notify_ids, "audio queue busy")
+            notify_store.mark_pending(notify_ids, "audio queue busy")
             return False
 
         self._buffer.clear()
