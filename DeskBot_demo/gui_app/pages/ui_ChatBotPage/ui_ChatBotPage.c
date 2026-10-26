@@ -224,7 +224,7 @@ static void ui_event_ChatBotPage(lv_event_t * e)
         lv_indev_wait_release(lv_indev_active());
         ui_ChatBotPage_Objs_reinit();
         if(!CHAT_BOT_UI_TEST)
-            stop_ai_chat();
+            set_ai_chat_interaction_enabled(false);
         lv_lib_pm_OpenPrePage(&page_manager);
     }
 }
@@ -236,6 +236,7 @@ static int ui_ai_chat_app_init(void)
         if(get_ai_chat_state() >= 0)
         {
             // The resident client was already started during ui_init().
+            set_ai_chat_interaction_enabled(true);
             return 0;
         }
 
@@ -246,6 +247,7 @@ static int ui_ai_chat_app_init(void)
             ui_msgbox_info("Error", "AIChat App init failed, wait for a moment and try again.");
             return -1;
         }
+        set_ai_chat_interaction_enabled(true);
     }
     return 0;
 }
@@ -290,6 +292,13 @@ static void _ChatBotTimer_cb(void)
     {
         lv_obj_remove_flag(ui_LabelInfo, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(ui_LabelInfo, "Starting ...");
+    }
+    else if(state == 3 && !is_ai_chat_interaction_enabled())
+    {
+        lv_obj_remove_flag(ui_LabelInfo, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(ui_LabelInfo, "等待进入对话");
+        ui_chat_para.anim_complete = true;
+        ui_ChatBotPage_Objs_reinit();
     }
     else
     {

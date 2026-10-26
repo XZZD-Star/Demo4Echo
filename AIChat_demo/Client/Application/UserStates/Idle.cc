@@ -10,43 +10,81 @@ std::thread IdleState::state_running_thread_;
 void IdleState::Enter(Application* app) {
     std::string json_message = R"({"type": "state", "state": "idle"})";
     app->ws_client_.SendText(json_message);
-    // clear recorded audio queue
     app->audio_processor_.clearRecordedAudioQueue();
-    // 开启录音
-    app->audio_processor_.startRecording();
-    // start state running
     state_running_.store(true);
     state_running_thread_ = std::thread([app]() { Run(app); });
-    USER_LOG_INFO("Into Idle state.");
+    USER_LOG_INFO("Into Idle state (interaction=%d).",
+                  app->get_chat_interaction_enabled());
 }
 
 void IdleState::Run(Application* app) {
     USER_LOG_INFO("Idle state run.");
-    SnowboyDetect* detector = SnowboyDetectConstructor("third_party/snowboy/resources/common.res",
-                                                     "third_party/snowboy/resources/models/echo.pmdl");
-    SnowboyDetectSetSensitivity(detector, "0.5");
-    SnowboyDetectSetAudioGain(detector, 1);
-    SnowboyDetectApplyFrontend(detector, false);
+    SnowboyDetect* detector = nullptr;
+    bool interaction_enabled = false;
     std::vector<int16_t> data;
+
     while (state_running_.load() == true) {
-        if(app->audio_processor_.recordedQueueIsEmpty() == false) {
+        bool should_enable = app->get_chat_interaction_enabled()
+                          && !app->get_notify_mode();
+
+        if (should_enable && !interaction_enabled) {
+            detector = SnowboyDetectConstructor(
+                "third_party/snowboy/resources/common.res",
+                "third_party/snowboy/resources/models/echo.pmdl");
+            if (!detector) {
+                USER_LOG_ERROR("Failed to create wake detector.");
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                continue;
+            }
+            SnowboyDetectSetSensitivity(detector, "0.5");
+            SnowboyDetectSetAudioGain(detector, 1);
+            SnowboyDetectApplyFrontend(detector, false);
+            app->audio_processor_.clearRecordedAudioQueue();
+            app->audio_processor_.startRecording();
+            interaction_enabled = true;
+            USER_LOG_INFO("Chat interaction enabled.");
+        } else if (!should_enable && interaction_enabled) {
+            app->audio_processor_.stopRecording();
+            app->audio_processor_.clearRecordedAudioQueue();
+            if (detector) {
+                SnowboyDetectDestructor(detector);
+                detector = nullptr;
+            }
+            interaction_enabled = false;
+            USER_LOG_INFO("Chat interaction disabled.");
+        }
+
+        if (interaction_enabled
+            && app->audio_processor_.recordedQueueIsEmpty() == false) {
             app->audio_processor_.getRecordedAudio(data);
-            // 检测唤醒词
-            int result = SnowboyDetectRunDetection(detector, data.data(), data.size(), false);
+            int result = SnowboyDetectRunDetection(
+                detector, data.data(), data.size(), false);
             if (result > 0) {
-                // 发生唤醒事件
                 USER_LOG_INFO("Wake detected.");
-                app->eventQueue_.Enqueue(static_cast<int>(AppEvent::wake_detected));
+                app->audio_processor_.stopRecording();
+                app->audio_processor_.clearRecordedAudioQueue();
+                SnowboyDetectDestructor(detector);
+                detector = nullptr;
+                interaction_enabled = false;
+                app->eventQueue_.Enqueue(
+                    static_cast<int>(AppEvent::wake_detected));
                 break;
             }
+        } else if (!interaction_enabled) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
-    SnowboyDetectDestructor(detector);
+
+    if (interaction_enabled) {
+        app->audio_processor_.stopRecording();
+        app->audio_processor_.clearRecordedAudioQueue();
+    }
+    if (detector) {
+        SnowboyDetectDestructor(detector);
+    }
 }
 
 void IdleState::Exit(Application* app) {
-    // stop录音
-    app->audio_processor_.stopRecording();
     // stop running
     state_running_.store(false);
     state_running_thread_.join();

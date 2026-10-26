@@ -63,6 +63,13 @@ public:
         return aliyun_api_key_;
     }
 
+    void set_chat_interaction_enabled(bool flag) {
+        chat_interaction_enabled_.store(flag);
+    }
+    bool get_chat_interaction_enabled() const {
+        return chat_interaction_enabled_.load();
+    }
+
     void set_notify_mode(bool flag) { notify_mode_ = flag; }
     bool get_notify_mode() const { return notify_mode_; }
 
@@ -111,6 +118,7 @@ private:
     std::string aliyun_api_key_;
     int ws_protocolVersion_;
     std::atomic<bool> notify_mode_{false};
+    std::atomic<bool> chat_interaction_enabled_{false};
     std::atomic<int> notify_id_{0};
     std::atomic<bool> first_tts_audio_received_{false};
     std::vector<int> notify_ids_;

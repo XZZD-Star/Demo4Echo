@@ -39,6 +39,10 @@ void destroy_aichat_app(void* app_ptr);
 // 获取当前状态
 ChatState get_aichat_app_state(void* app_ptr);
 
+// 控制页面内语音交互；关闭时仍保持连接和主动播报。
+void set_aichat_app_chat_interaction(void* app_ptr, bool enabled);
+bool get_aichat_app_chat_interaction(void* app_ptr);
+
 // 获取 Intent 数据
 bool get_aichat_app_intent(void* app_ptr, IntentData* intent_data);
 
