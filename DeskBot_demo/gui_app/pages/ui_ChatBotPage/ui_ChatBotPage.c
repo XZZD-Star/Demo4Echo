@@ -233,6 +233,12 @@ static int ui_ai_chat_app_init(void)
 {
     if(!CHAT_BOT_UI_TEST) 
     {
+        if(get_ai_chat_state() >= 0)
+        {
+            // The resident client was already started during ui_init().
+            return 0;
+        }
+
         int errno = start_ai_chat(ui_system_para.aichat_app_info.addr, ui_system_para.aichat_app_info.port, ui_system_para.aichat_app_info.token, ui_system_para.aichat_app_info.device_id, ui_system_para.aichat_app_info.aliyun_api_key, ui_system_para.aichat_app_info.protocol_version, ui_system_para.aichat_app_info.sample_rate, ui_system_para.aichat_app_info.channels, ui_system_para.aichat_app_info.frame_duration);
         if(errno)
         {
