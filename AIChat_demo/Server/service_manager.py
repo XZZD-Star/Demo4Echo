@@ -61,6 +61,8 @@ class ServiceManager:
         self.client_state = "unknown"       # 客户端上报的状态
         self.conversation_busy = threading.Event()  # 对话/识别占用中
         self.notify_playing = False         # 正在播报通知
+        self.chat_turn_id = 0
+        self.chat_turn_lock = threading.Lock()
         self.owner_id = "ou_1359f562d0a768f91232760499bc1cc0"  # Shared Feishu owner
         self.feishu_chat_id = global_settings.FEISHU_CHAT_ID
 
@@ -81,6 +83,15 @@ class ServiceManager:
     def set_client_state(self, state):
         """记录客户端上报的状态，用于判断能否主动播报。"""
         self.client_state = str(state or "unknown")
+
+    def invalidate_chat_turn(self):
+        with self.chat_turn_lock:
+            self.chat_turn_id += 1
+            return self.chat_turn_id
+
+    def is_chat_turn_active(self, turn_id):
+        with self.chat_turn_lock:
+            return self.chat_turn_id == turn_id
 
     def drain_send_queues(self):
         """清空待发送队列，避免上一条连接的残留音频推给新连接。"""
@@ -199,19 +210,26 @@ class ServiceManager:
         }
         self.ws_send_queue.put(json.dumps(msg))
 
-    def _speak_reply(self, text):
+    def _speak_reply(self, text, turn_id):
         """Send a final reply through the existing TTS stream."""
+        if not self.is_chat_turn_active(turn_id):
+            logger.warning("客户端已结束本轮，丢弃迟到回复。")
+            return False
         text = (text or "").strip()
         if not text:
             text = "抱歉，这次没有生成有效回复，请再说一次。"
         try:
             self.tts_service.tts_speech_stream(text)
             self.tts_service.tts_close()
+            return True
         except Exception:
             logger.exception("对话回复 TTS 失败")
+            return False
 
-    def _finish_chat_reply(self):
+    def _finish_chat_reply(self, turn_id):
         """Mark the end of this chat turn after TTS completion."""
+        if not self.is_chat_turn_active(turn_id):
+            return
         self.ws_send_queue.put(
             json.dumps({"type": "chat", "dialogue": "end"})
         )
@@ -224,9 +242,16 @@ class ServiceManager:
         """
         # 对话期间标记占用，主动播报会让路。
         self.conversation_busy.set()
+        turn_id = self.invalidate_chat_turn()
+        self.ws_send_queue.put(
+            json.dumps({"type": "chat", "dialogue": "processing"})
+        )
         try:
             # 1.进行意图识别。语义理解交给模型，不再用关键词预判待办。
             function_calls = self.intent_service.detect_intent(text)
+            if not self.is_chat_turn_active(turn_id):
+                logger.warning("意图返回时本轮已结束，丢弃结果。")
+                return
             history_list = []
             todo_result = None
             todo_error = None
@@ -274,10 +299,16 @@ class ServiceManager:
                 is_stream=True,
                 owner_id=self.owner_id,
             )
+            if not self.is_chat_turn_active(turn_id):
+                logger.warning("聊天返回时本轮已结束，丢弃结果。")
+                return
             if answers == -1:
                 logger.error("LLM 生成失败")
-                self._speak_reply("抱歉，我暂时无法处理这个请求，请稍后再试。")
-                self._finish_chat_reply()
+                self._speak_reply(
+                    "抱歉，我暂时无法处理这个请求，请稍后再试。",
+                    turn_id,
+                )
+                self._finish_chat_reply(turn_id)
                 return
             if todo_error:
                 reply = {
@@ -286,8 +317,8 @@ class ServiceManager:
                     "empty": "待办内容不能为空。",
                     "too_long": "待办内容太长了。",
                 }.get(todo_error, "待办没有创建成功，请换个说法再试一次。")
-                self._speak_reply(reply)
-                self._finish_chat_reply()
+                self._speak_reply(reply, turn_id)
+                self._finish_chat_reply(turn_id)
                 return
             if isinstance(answers, list):
                 # Tool-only response: confirm the resulting shared action.
@@ -301,14 +332,14 @@ class ServiceManager:
                     reply = "已经处理好了。"
                 else:
                     reply = "这件事没有处理成功，请再说一次。"
-                self._speak_reply(reply)
-                self._finish_chat_reply()
+                self._speak_reply(reply, turn_id)
+                self._finish_chat_reply(turn_id)
                 return
             reply = "".join(
                 chunk for chunk in answers if isinstance(chunk, str)
             ).strip()
             logger.info("[回复]: %s", reply)
-            self._speak_reply(reply)
-            self._finish_chat_reply()
+            self._speak_reply(reply, turn_id)
+            self._finish_chat_reply(turn_id)
         finally:
             self.conversation_busy.clear()

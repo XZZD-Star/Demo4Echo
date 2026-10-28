@@ -56,6 +56,7 @@ class TextHandler:
             self.service_manager.set_client_state(client_state)
 
             if client_state == 'idle':
+                self.service_manager.invalidate_chat_turn()
                 self.service_manager.reset_services()
                 logger.info("Client is idle, resetting services")
 
