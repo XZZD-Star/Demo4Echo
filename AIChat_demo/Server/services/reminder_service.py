@@ -42,13 +42,12 @@ class DeskbotReminderService:
             existing = notify_store.find_by_dedupe_key(
                 f"todo-delivery:{delivery_id}"
             )
-            if existing and existing["status"] == "sent":
+            if existing and existing["status"] in ("sent", "failed"):
                 echomate_store.mark_delivery(delivery_id, "sent")
                 echomate_store.finalize_todo_if_delivered(todo_id)
                 return True
-            # Existing pending/claimed notification will be handled by NotifyThread.
-            echomate_store.mark_delivery(delivery_id, "sent")
-            echomate_store.finalize_todo_if_delivered(todo_id)
+            # Existing pending notification will be handled by NotifyThread.
+            # Keep the delivery claimed until its ACK closes it.
             return True
 
         logger.info(

@@ -262,11 +262,18 @@ def execute_tool_call(name, arguments, owner_id, source, chat_id=""):
             args = json.loads(arguments or "{}")
         except (TypeError, json.JSONDecodeError):
             args = {}
-        title = str(args.get("title") or "").strip()
+        title = str(
+            args.get("title")
+            or args.get("content")
+            or args.get("description")
+            or ""
+        ).strip()
         due_text = str(args.get("due_at") or "").strip()
         due = _parse_local_datetime(due_text)
-        if not title or due is None:
-            return {"ok": False, "error": "待办标题或时间无效"}
+        if not title:
+            return {"ok": False, "error": "empty"}
+        if due is None:
+            return {"ok": False, "error": "bad_due"}
 
         notify_deskbot = args.get("notify_deskbot", True)
         notify_feishu = args.get("notify_feishu", True)
