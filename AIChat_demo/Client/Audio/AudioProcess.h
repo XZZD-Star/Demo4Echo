@@ -158,6 +158,9 @@ private:
     std::condition_variable recordedAudioCV;
     PaStream* recordStream;
     bool isRecording;
+    bool port_audio_ready_;
+    PaDeviceIndex input_device_;
+    PaDeviceIndex output_device_;
     // 播放相关
     std::queue<std::vector<int16_t>> playbackQueue;
     std::mutex playbackMutex;

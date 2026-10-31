@@ -29,6 +29,59 @@ Application::~Application() {
     USER_LOG_WARN("Application destruct.");
 }
 
+std::string Application::begin_voice_turn() {
+    auto now = std::chrono::system_clock::now().time_since_epoch();
+    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now)
+                      .count();
+    std::lock_guard<std::mutex> lock(turn_mutex_);
+    ++turn_generation_;
+    active_turn_id_ = "voice-" + std::to_string(millis)
+                    + "-" + std::to_string(turn_generation_);
+    asr_phase_ = AsrPhase::preparing;
+    asr_terminal_ = false;
+    asr_ready_.store(false);
+    return active_turn_id_;
+}
+
+std::string Application::get_active_turn_id() {
+    std::lock_guard<std::mutex> lock(turn_mutex_);
+    return active_turn_id_;
+}
+
+bool Application::is_current_turn(const std::string& turn_id) {
+    std::lock_guard<std::mutex> lock(turn_mutex_);
+    return !turn_id.empty() && turn_id == active_turn_id_;
+}
+
+bool Application::set_asr_phase(const std::string& turn_id, AsrPhase phase) {
+    std::lock_guard<std::mutex> lock(turn_mutex_);
+    if (turn_id.empty() || turn_id != active_turn_id_ || asr_terminal_) {
+        return false;
+    }
+    asr_phase_ = phase;
+    if (phase == AsrPhase::terminal) {
+        asr_terminal_ = true;
+    }
+    return true;
+}
+
+bool Application::mark_asr_terminal(const std::string& turn_id) {
+    return set_asr_phase(turn_id, AsrPhase::terminal);
+}
+
+AsrPhase Application::get_asr_phase(const std::string& turn_id) {
+    std::lock_guard<std::mutex> lock(turn_mutex_);
+    if (turn_id.empty() || turn_id != active_turn_id_) {
+        return AsrPhase::none;
+    }
+    return asr_phase_;
+}
+
+bool Application::get_asr_terminal(const std::string& turn_id) {
+    std::lock_guard<std::mutex> lock(turn_mutex_);
+    return turn_id == active_turn_id_ && asr_terminal_;
+}
+
 void Application::Run() {
 
     // 启动状态机事件处理线程

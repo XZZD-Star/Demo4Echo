@@ -12,10 +12,31 @@ AudioProcess::AudioProcess(int sample_rate, int channels, int frame_duration_ms)
       decoder(nullptr), 
       isRecording(false), 
       recordStream(nullptr),
+      port_audio_ready_(false),
+      input_device_(paNoDevice),
+      output_device_(paNoDevice),
       isPlaying(false),
       playbackStream(nullptr) {
         if (!initializeOpus()) {
             USER_LOG_ERROR("Failed to initialize Opus encoder/decoder.");
+        }
+        PaError err = Pa_Initialize();
+        if (err != paNoError) {
+            USER_LOG_ERROR("PortAudio error: %s", Pa_GetErrorText(err));
+            return;
+        }
+        port_audio_ready_ = true;
+        input_device_ = Pa_GetDefaultInputDevice();
+        output_device_ = Pa_GetDefaultOutputDevice();
+        if (input_device_ != paNoDevice) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(input_device_);
+            USER_LOG_INFO("PortAudio input device: %s",
+                          info ? info->name : "unknown");
+        }
+        if (output_device_ != paNoDevice) {
+            const PaDeviceInfo* info = Pa_GetDeviceInfo(output_device_);
+            USER_LOG_INFO("PortAudio output device: %s",
+                          info ? info->name : "unknown");
         }
 }
 
@@ -28,6 +49,10 @@ AudioProcess::~AudioProcess() {
     }
     if (isPlaying) {
         stopPlaying();
+    }
+    if (port_audio_ready_) {
+        Pa_Terminate();
+        port_audio_ready_ = false;
     }
 }
 
@@ -67,21 +92,17 @@ bool AudioProcess::startRecording() {
         return false;
     }
 
-    PaError err;
-
-    // 初始化 PortAudio
-    err = Pa_Initialize();
-    if (err != paNoError) {
-        USER_LOG_ERROR("PortAudio error: %s", Pa_GetErrorText(err));
+    if (!port_audio_ready_) {
+        USER_LOG_ERROR("PortAudio is not initialized.");
         return false;
     }
+    PaError err;
 
     // 配置音频流参数
     PaStreamParameters inputParameters;
-    inputParameters.device = Pa_GetDefaultInputDevice();
+    inputParameters.device = input_device_;
     if (inputParameters.device == paNoDevice) {
         USER_LOG_ERROR("No default input device found.");
-        Pa_Terminate();
         return false;
     }
     inputParameters.channelCount = channels;       // 通道数
@@ -100,7 +121,6 @@ bool AudioProcess::startRecording() {
                         this);
     if (err != paNoError) {
         USER_LOG_ERROR("Error opening recordStream: %s", Pa_GetErrorText(err));
-        Pa_Terminate();
         return false;
     }
 
@@ -109,7 +129,6 @@ bool AudioProcess::startRecording() {
     if (err != paNoError) {
         USER_LOG_ERROR("Error starting recordStream: %s", Pa_GetErrorText(err));
         Pa_CloseStream(recordStream);
-        Pa_Terminate();
         return false;
     }
 
@@ -140,9 +159,6 @@ bool AudioProcess::stopRecording() {
         USER_LOG_ERROR("Error closing recordStream: %s", Pa_GetErrorText(err));
         return false;
     }
-
-    // 释放 PortAudio 资源
-    Pa_Terminate();
 
     isRecording = false;
     USER_LOG_INFO("Recording stopped.");
@@ -205,21 +221,17 @@ bool AudioProcess::startPlaying() {
         return false;
     }
 
-    PaError err;
-
-    // 初始化 PortAudio
-    err = Pa_Initialize();
-    if (err != paNoError) {
-        USER_LOG_ERROR("PortAudio error: %s", Pa_GetErrorText(err));
+    if (!port_audio_ready_) {
+        USER_LOG_ERROR("PortAudio is not initialized.");
         return false;
     }
+    PaError err;
 
     // 配置音频流参数
     PaStreamParameters outputParameters;
-    outputParameters.device = Pa_GetDefaultOutputDevice();
+    outputParameters.device = output_device_;
     if (outputParameters.device == paNoDevice) {
         USER_LOG_ERROR("No default output device found.");
-        Pa_Terminate();
         return false;
     }
     outputParameters.channelCount = channels;       // 通道数
@@ -238,7 +250,6 @@ bool AudioProcess::startPlaying() {
                         this);
     if (err != paNoError) {
         USER_LOG_ERROR("Error opening playbackStream: %s", Pa_GetErrorText(err));
-        Pa_Terminate();
         return false;
     }
 
@@ -247,7 +258,6 @@ bool AudioProcess::startPlaying() {
     if (err != paNoError) {
         USER_LOG_ERROR("Error starting playbackStream: %s", Pa_GetErrorText(err));
         Pa_CloseStream(playbackStream);
-        Pa_Terminate();
         return false;
     }
 
@@ -277,9 +287,6 @@ bool AudioProcess::stopPlaying() {
         USER_LOG_ERROR("Error closing playbackStream: %s", Pa_GetErrorText(err));
         return false;
     }
-
-    // 释放 PortAudio 资源
-    Pa_Terminate();
 
     isPlaying = false;
     USER_LOG_INFO("Playback stopped.");

@@ -49,6 +49,7 @@ void WSHandler::ws_msg_handle(const std::string& message, bool is_binary, Applic
         // first time to receive binary message
         if(app->get_first_audio_msg_received() == true) {
             app->set_first_audio_msg_received(false);
+            app->set_playback_kind(PlaybackKind::server_reply);
             app->eventQueue_.Enqueue(static_cast<int>(AppEvent::speaking_msg_received));
         }
 
@@ -80,31 +81,119 @@ void WSHandler::handle_vad_message(const Json::Value& root, Application* app) {
     if (state.isString()) {
         std::string stateStr = state.asString();
         if (stateStr == "no_speech") {
-            app->eventQueue_.Enqueue(static_cast<int>(AppEvent::vad_no_speech));
+            app->set_asr_ready(false);
+            if (app->getState() != static_cast<int>(AppState::listening)) {
+                USER_LOG_WARN("Ignoring VAD no_speech outside listening.");
+                return;
+            }
+            std::string turn_id = root["turn_id"].isString()
+                ? root["turn_id"].asString()
+                : "";
+            if (app->mark_asr_terminal(turn_id)) {
+                app->eventQueue_.Enqueue(
+                    static_cast<int>(AppEvent::vad_no_speech));
+            } else {
+                USER_LOG_WARN("Ignoring stale VAD event for turn: %s",
+                              turn_id.c_str());
+            }
         }
     }
 }
 
 // 处理 ASR 消息
 void WSHandler::handle_asr_message(const Json::Value& root, Application* app) {
+    std::string turn_id = root["turn_id"].isString()
+        ? root["turn_id"].asString()
+        : "";
+    const Json::Value state = root["state"];
+    if (state.isString()) {
+        std::string stateStr = state.asString();
+        if (stateStr == "ready") {
+            USER_LOG_INFO("ASR session ready.");
+            if (app->set_asr_phase(turn_id, AsrPhase::capturing)) {
+                app->set_asr_ready(true);
+            } else {
+                USER_LOG_WARN("Ignoring stale ASR ready for turn: %s",
+                              turn_id.c_str());
+            }
+            return;
+        }
+        if (stateStr == "speech_started") {
+            if (!app->set_asr_phase(turn_id, AsrPhase::awaiting_result)) {
+                USER_LOG_WARN("Ignoring stale ASR speech event for turn: %s",
+                              turn_id.c_str());
+            }
+            return;
+        }
+        if (stateStr == "error") {
+            USER_LOG_ERROR("ASR session failed: %s",
+                           root["reason"].isString()
+                               ? root["reason"].asCString()
+                               : "unknown");
+            app->set_asr_ready(false);
+            if (app->mark_asr_terminal(turn_id)) {
+                app->eventQueue_.Enqueue(
+                    static_cast<int>(AppEvent::fault_happen));
+            }
+            return;
+        }
+    }
+
     const Json::Value text = root["text"];
-    if (text.isString()) {
+    if (text.isString() && app->mark_asr_terminal(turn_id)) {
         std::string asr_text_ = text.asString();
         USER_LOG_INFO("Received ASR text: %s", asr_text_.c_str());
+        app->set_asr_ready(false);
+        app->eventQueue_.Enqueue(static_cast<int>(AppEvent::asr_received));
+    } else if (text.isString()) {
+        USER_LOG_WARN("Ignoring stale ASR result for turn: %s",
+                      turn_id.c_str());
     } else {
         USER_LOG_WARN("Invalid ASR text value.");
     }
-    app->eventQueue_.Enqueue(static_cast<int>(AppEvent::asr_received));
 }
 
 // 处理 TTS 消息
 void WSHandler::handle_tts_message(const Json::Value& root, Application* app) {
     const Json::Value state = root["state"];
+    std::string turn_id = root["turn_id"].isString()
+        ? root["turn_id"].asString()
+        : "";
+    if (!turn_id.empty() && !app->is_current_turn(turn_id)) {
+        USER_LOG_WARN("Ignoring stale TTS event for turn: %s",
+                      turn_id.c_str());
+        return;
+    }
     if (state.isString()) {
         std::string stateStr = state.asString();
+        int current_state = app->getState();
+        bool audio_state = current_state == static_cast<int>(AppState::thinking)
+                        || current_state == static_cast<int>(AppState::speaking);
         if (stateStr == "end") {
+            if (!audio_state) {
+                USER_LOG_WARN("Ignoring stale TTS end in state=%d.",
+                              current_state);
+                return;
+            }
             USER_LOG_INFO("Received TTS end.");
             app->set_tts_completed(true);
+        } else if (stateStr == "error") {
+            const Json::Value reason = root["reason"];
+            if (!audio_state) {
+                USER_LOG_WARN("Ignoring stale TTS error in state=%d.",
+                              current_state);
+                return;
+            }
+            USER_LOG_ERROR("Received TTS error: %s",
+                           reason.isString()
+                               ? reason.asCString()
+                               : "unknown");
+            if (current_state == static_cast<int>(AppState::thinking)) {
+                app->eventQueue_.Enqueue(
+                    static_cast<int>(AppEvent::reply_failed));
+            } else {
+                app->set_tts_error(true);
+            }
         }
     }
 }
@@ -114,6 +203,14 @@ void WSHandler::handle_chat_message(const Json::Value& root, Application* app) {
     const Json::Value dialogue = root["dialogue"];
     if (dialogue.isString()) {
         std::string dialogueStr = dialogue.asString();
+        std::string turn_id = root["turn_id"].isString()
+            ? root["turn_id"].asString()
+            : "";
+        if (!app->is_current_turn(turn_id)) {
+            USER_LOG_WARN("Ignoring stale dialogue event for turn: %s",
+                          turn_id.c_str());
+            return;
+        }
         if (dialogueStr == "end") {
             USER_LOG_INFO("Received dialogue end.");
             app->set_dialogue_completed(true);
@@ -158,6 +255,7 @@ void WSHandler::handle_notify_message(const Json::Value& root, Application* app)
     app->set_first_audio_msg_received(false);
     app->set_first_tts_audio_received(false);
     app->set_tts_completed(false);
+    app->set_tts_error(false);
     app->set_dialogue_completed(false);
 
     app->eventQueue_.Enqueue(static_cast<int>(AppEvent::notify_received));

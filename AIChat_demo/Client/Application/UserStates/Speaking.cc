@@ -8,17 +8,33 @@ std::atomic<bool> SpeakingState::state_running_{false};
 std::thread SpeakingState::state_running_thread_;
 
 void SpeakingState::Enter(Application* app) {
-    if (app->get_notify_mode()) {
+    app->set_tts_error(false);
+    PlaybackKind playback_kind = app->get_playback_kind();
+    if (playback_kind == PlaybackKind::notify_prompt) {
         // 主动播报：Idle::Exit 刚把提示音放进播放队列，这里不能清空。
         app->set_tts_completed(false);
         app->set_dialogue_completed(false);
         USER_LOG_INFO("Speaking enter for notify id=%d.",
                       app->get_notify_id());
+    } else if (playback_kind == PlaybackKind::wake_prompt) {
+        // Idle::Exit has marked the local prompt as fully queued. Keep that
+        // completion flag because no server tts end message will follow.
+        app->set_dialogue_completed(false);
+    } else if (playback_kind == PlaybackKind::server_reply) {
+        // A tts end may arrive just before the first audio switches states.
+        // Preserve it and let the playback queue determine actual completion.
+        app->set_dialogue_completed(false);
+    } else {
+        app->set_tts_completed(false);
+        app->set_dialogue_completed(false);
     }
     std::string json_message = R"({"type": "state", "state": "speaking"})";
     app->ws_client_.SendText(json_message);
     // start播放
-    app->audio_processor_.startPlaying();
+    if (!app->audio_processor_.startPlaying()) {
+        USER_LOG_ERROR("Failed to start playback stream.");
+        app->set_tts_error(true);
+    }
     // running
     state_running_.store(true);
     state_running_thread_ = std::thread([app]() { Run(app); });
@@ -31,6 +47,42 @@ void SpeakingState::Run(Application* app) {
     int empty_polls = 0;
     while(state_running_.load() == true) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        if(app->get_tts_error()) {
+            USER_LOG_ERROR("Speaking aborted by TTS/playback error.");
+            PlaybackKind playback_kind = app->get_playback_kind();
+            if(playback_kind == PlaybackKind::notify_prompt) {
+                auto notify_ids = app->get_notify_ids();
+                if(!notify_ids.empty()) {
+                    std::string ack = "{\"type\":\"notify_ack\",\"ids\":[";
+                    for(size_t i = 0; i < notify_ids.size(); ++i) {
+                        if(i > 0) ack += ",";
+                        ack += std::to_string(notify_ids[i]);
+                    }
+                    ack += "],\"status\":\"error\"}";
+                    app->ws_client_.SendText(ack);
+                    USER_LOG_INFO("Notify error ACK sent: %s", ack.c_str());
+                }
+                app->set_notify_ids({});
+                app->set_notify_mode(false);
+                app->set_notify_id(0);
+                app->eventQueue_.Enqueue(
+                    static_cast<int>(AppEvent::notify_end));
+            } else if (playback_kind == PlaybackKind::wake_prompt) {
+                app->eventQueue_.Enqueue(
+                    static_cast<int>(AppEvent::fault_happen));
+            } else if (playback_kind == PlaybackKind::server_reply) {
+                app->eventQueue_.Enqueue(
+                    static_cast<int>(AppEvent::reply_failed));
+            } else {
+                app->eventQueue_.Enqueue(
+                    static_cast<int>(AppEvent::speaking_end));
+            }
+            app->set_tts_error(false);
+            app->set_tts_completed(false);
+            app->set_dialogue_completed(false);
+            break;
+        }
 
         if(app->get_notify_mode()) {
             if(app->audio_processor_.playbackQueueIsEmpty()) {
@@ -88,6 +140,7 @@ void SpeakingState::Run(Application* app) {
                 app->eventQueue_.Enqueue(static_cast<int>(AppEvent::dialogue_end));
             }
             app->set_tts_completed(false);
+            app->set_tts_error(false);
             app->set_dialogue_completed(false);
             break;
         }
@@ -102,5 +155,7 @@ void SpeakingState::Exit(Application* app) {
     // stop state running
     state_running_.store(false);
     state_running_thread_.join();
+    app->set_tts_error(false);
+    app->set_playback_kind(PlaybackKind::none);
     USER_LOG_INFO("Speaking exit.");
 }

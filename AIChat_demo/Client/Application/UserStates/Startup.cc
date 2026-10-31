@@ -8,13 +8,14 @@ void StartupState::Enter(Application* app) {
     USER_LOG_INFO("Into startup state.");
     app->ws_client_.Run(); // 会开一个thread
     app->ws_client_.Connect();
-    // 等待连接建立, 尝试3次
-    int try_count = 1;
-    while(!app->ws_client_.IsConnected() && try_count && !app->get_threads_stop_sig()) {
-        try_count--;
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-        USER_LOG_INFO("Try to connect to server.");
-        app->ws_client_.Connect();
+    // Connect is asynchronous. Poll briefly instead of adding a fixed
+    // five-second delay before the first startup check.
+    for (int i = 0;
+         i < 250
+         && !app->ws_client_.IsConnected()
+         && !app->get_threads_stop_sig();
+         ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     
     if (app->ws_client_.IsConnected()) {

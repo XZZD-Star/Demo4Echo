@@ -11,6 +11,9 @@ void IdleState::Enter(Application* app) {
     std::string json_message = R"({"type": "state", "state": "idle"})";
     app->ws_client_.SendText(json_message);
     app->audio_processor_.clearRecordedAudioQueue();
+    app->set_tts_error(false);
+    app->set_tts_completed(false);
+    app->set_dialogue_completed(false);
     state_running_.store(true);
     state_running_thread_ = std::thread([app]() { Run(app); });
     USER_LOG_INFO("Into Idle state (interaction=%d).",
@@ -66,6 +69,11 @@ void IdleState::Run(Application* app) {
                 SnowboyDetectDestructor(detector);
                 detector = nullptr;
                 interaction_enabled = false;
+                std::string turn_id = app->begin_voice_turn();
+                app->ws_client_.SendText(
+                    R"({"type":"wake_detected","turn_id":")"
+                    + turn_id + R"("})"
+                );
                 app->eventQueue_.Enqueue(
                     static_cast<int>(AppEvent::wake_detected));
                 break;
@@ -93,6 +101,11 @@ void IdleState::Exit(Application* app) {
     std::string tone_path = app->get_notify_mode()
         ? "third_party/audio/notify.pcm"
         : "third_party/audio/waked.pcm";
+    app->set_playback_kind(
+        app->get_notify_mode()
+            ? PlaybackKind::notify_prompt
+            : PlaybackKind::wake_prompt
+    );
     USER_LOG_INFO("Idle exit tone: %s", tone_path.c_str());
     auto audioQueue = app->audio_processor_.loadAudioFromFile(tone_path, 40);
     while (!audioQueue.empty()) {
