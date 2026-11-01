@@ -1,7 +1,7 @@
 from service_manager import ServiceManager
 from tools.logger import logger
 from tools.registry import global_registry
-from tools import notify_store
+from tools import flow_log, notify_store
 
 class TextHandler:
     def __init__(self, service_manager: ServiceManager):
@@ -32,8 +32,20 @@ class TextHandler:
                 return {"type": "error", "message": "Invalid functions format"}
             self.handle_register_functions(functions)
 
+        elif data.get('type') == 'wake_detected':
+            trace_id = self.service_manager.begin_voice_trace(
+                data.get('turn_id')
+            )
+            flow_log.emit(
+                "client", "wake", "info",
+                trace_id=trace_id,
+                message="wake detected",
+                stage="wake",
+            )
+            # Use the prompt playback time to prewarm cloud ASR.
+            self.service_manager.start_asr_session()
+
         elif data.get('type') == 'notify_ack':
-            # 客户端播放确认，仅用于统计，不触发重试。
             ids = data.get('ids')
             if not isinstance(ids, list):
                 single = data.get('id')
@@ -41,29 +53,71 @@ class TextHandler:
 
             clean_ids = [i for i in ids if isinstance(i, int)]
             if clean_ids:
+                ack_status = str(data.get('status') or 'played').lower()
+                flow_log.emit(
+                    "ack",
+                    "notify_ack",
+                    ack_status,
+                    trace_id=f"notify-{clean_ids[0]}",
+                    notify_id=clean_ids[0],
+                    message=f"ack status={ack_status}",
+                    ids=clean_ids,
+                )
                 try:
-                    updated = notify_store.mark_acked(clean_ids)
-                    logger.info(
-                        "收到播放确认 %s，更新 %d 条。",
-                        clean_ids, updated,
-                    )
+                    if ack_status == 'played':
+                        updated = notify_store.mark_acked(clean_ids)
+                        logger.info(
+                            "收到播放确认 %s，更新 %d 条。",
+                            clean_ids, updated,
+                        )
+                    elif ack_status in ("timeout", "error"):
+                        updated = notify_store.mark_playback_failed(
+                            clean_ids, f"client playback {ack_status}"
+                        )
+                        logger.warning(
+                            "客户端播放失败 %s（%s），更新 %d 条。",
+                            clean_ids, ack_status, updated,
+                        )
+                    else:
+                        logger.warning(
+                            "忽略未知播放确认状态：%s", ack_status
+                        )
                 except Exception as exc:
                     logger.warning("记录播放确认失败：%s", exc)
 
         elif data.get('type') == 'state':
             # client 端 idle 信息
-            client_state = data.get('state')
+            client_state = str(data.get('state') or "unknown")
+            trace_id = None
+            if client_state in ("speaking", "listening", "thinking"):
+                trace_id = (
+                    self.service_manager.active_voice_trace_id()
+                    if self.service_manager.notify_playing
+                    else self.service_manager.begin_voice_trace()
+                )
+            elif client_state == "idle":
+                trace_id = self.service_manager.active_voice_trace_id()
             self.service_manager.set_client_state(client_state)
+            flow_log.emit(
+                "client",
+                "state",
+                "ok" if client_state == "idle" else "info",
+                trace_id=trace_id,
+                message=f"state={client_state}",
+                stage=client_state,
+            )
 
             if client_state == 'idle':
+                self.service_manager.invalidate_chat_turn()
                 self.service_manager.reset_services()
+                self.service_manager.clear_voice_trace(trace_id)
                 logger.info("Client is idle, resetting services")
 
             elif client_state == 'listening':
                 # 根据配置启动本地或云端 ASR 会话。
                 self.service_manager.start_asr_session()
                 # 提前打开tts流
-                self.service_manager.tts_service.tts_set(on_data=self.service_manager._tts_on_data, on_complete=self.service_manager._tts_on_complete)
+                self.service_manager.prepare_tts()
 
             elif client_state == 'thinking':
                 logger.info("Client is thinking")

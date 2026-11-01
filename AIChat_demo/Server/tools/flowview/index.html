@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Echo-Mate Flow</title>
+  <link rel="stylesheet" href="/assets/flowview.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-bar">
+      <div class="brand" aria-label="Echo-Mate Flow">
+        <span class="brand-mark">EM</span>
+        <span class="brand-name">Echo-Mate</span>
+        <span class="brand-section">Flow</span>
+      </div>
+
+      <div class="mode-switch" role="tablist" aria-label="日志模式">
+        <button id="terminalMode" class="mode-button is-active" type="button"
+                role="tab" aria-selected="true" data-mode="terminal">终端</button>
+        <button id="flowMode" class="mode-button" type="button"
+                role="tab" aria-selected="false" data-mode="flow">流程</button>
+      </div>
+
+      <div class="connection" aria-live="polite">
+        <span id="connectionDot" class="status-dot"></span>
+        <span id="connectionText">连接中</span>
+        <span id="lastUpdate" class="last-update"></span>
+      </div>
+    </header>
+
+    <section id="terminalToolbar" class="toolbar">
+      <label class="field field-search">
+        <span class="field-label">搜索</span>
+        <input id="searchInput" type="search" autocomplete="off" spellcheck="false"
+               placeholder="消息、事件、trace">
+      </label>
+      <label class="field">
+        <span class="field-label">来源</span>
+        <select id="sourceFilter">
+          <option value="">全部</option>
+          <option value="client">Client</option>
+          <option value="server">Server</option>
+          <option value="asr">ASR</option>
+          <option value="llm">LLM</option>
+          <option value="tts">TTS</option>
+          <option value="notify">Notify</option>
+          <option value="ack">ACK</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">级别</span>
+        <select id="statusFilter">
+          <option value="">全部</option>
+          <option value="info">Info</option>
+          <option value="ok">OK</option>
+          <option value="warn">Warn</option>
+          <option value="error">Error</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Trace</span>
+        <input id="traceFilter" type="text" autocomplete="off" spellcheck="false"
+               placeholder="trace id">
+      </label>
+      <label class="field field-notify">
+        <span class="field-label">Notify</span>
+        <input id="notifyFilter" type="number" min="1" inputmode="numeric"
+               placeholder="id">
+      </label>
+      <div class="toolbar-actions">
+        <button id="followButton" class="action-button is-active" type="button"
+                aria-pressed="true">跟随</button>
+        <button id="pauseButton" class="action-button" type="button"
+                aria-pressed="false">暂停</button>
+      </div>
+    </section>
+
+    <section id="flowToolbar" class="toolbar toolbar-flow" hidden>
+      <label class="field field-trace-select">
+        <span class="field-label">最近流程</span>
+        <select id="traceSelect"></select>
+      </label>
+      <button id="latestTraceButton" class="action-button" type="button">最新</button>
+      <span id="flowMeta" class="flow-meta"></span>
+    </section>
+
+    <main class="workspace">
+      <section id="terminalView" class="view" role="tabpanel" aria-labelledby="terminalMode">
+        <div class="log-header" aria-hidden="true">
+          <span>时间</span>
+          <span>级别</span>
+          <span>来源</span>
+          <span>事件</span>
+          <span>消息</span>
+          <span>Trace</span>
+        </div>
+        <div id="logViewport" class="log-viewport" role="log" aria-live="off">
+          <div id="terminalEmpty" class="empty-state">等待日志</div>
+        </div>
+      </section>
+
+      <section id="flowView" class="view flow-view" role="tabpanel"
+               aria-labelledby="flowMode" hidden>
+        <div class="flow-summary">
+          <div>
+            <span id="flowKind" class="summary-kind">流程</span>
+            <strong id="flowTraceId" class="summary-id">未选择</strong>
+          </div>
+          <div class="summary-facts">
+            <span id="flowDuration">-</span>
+            <span id="flowEventCount">0 条事件</span>
+            <span id="flowStatus" class="summary-status">等待</span>
+          </div>
+        </div>
+        <div id="stageRail" class="stage-rail"></div>
+        <div class="flow-log-header">
+          <span>流程事件</span>
+          <button id="clearTraceButton" class="text-button" type="button">返回最新</button>
+        </div>
+        <div id="flowLogViewport" class="log-viewport flow-log-viewport"
+             role="log" aria-live="off">
+          <div id="flowEmpty" class="empty-state">暂无可聚合流程</div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="status-bar">
+      <span id="eventCount">0 条</span>
+      <span id="bufferStatus"></span>
+      <span id="viewerHealth">日志在线</span>
+    </footer>
+  </div>
+
+  <script src="/assets/flowview.js"></script>
+</body>
+</html>

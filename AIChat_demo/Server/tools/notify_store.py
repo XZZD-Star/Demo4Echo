@@ -6,9 +6,12 @@
 
 import sqlite3
 import time
-from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+import echomate_store
+from sqlite_db import connect as sqlite_connect
+from sqlite_db import retry_locked
 
 DB_PATH = Path("/var/lib/echomate/assistant.db")
 
@@ -30,19 +33,12 @@ def now_utc():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-@contextmanager
 def _connect():
-    """连接用完必须关闭，否则 WAL 下会不断累积句柄并导致 database is locked。"""
-    conn = sqlite3.connect(str(DB_PATH), timeout=15)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    return sqlite_connect(DB_PATH)
+
+
+def _write_connect():
+    return sqlite_connect(DB_PATH, write=True)
 
 
 def _shorten(text):
@@ -58,6 +54,7 @@ def init_notify_tables():
 
     with _connect() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
+    with _write_connect() as conn:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS notify_outbox (
@@ -122,6 +119,7 @@ def _enforce_queue_cap(conn):
     return excess
 
 
+@retry_locked
 def enqueue(kind, text, dedupe_key=None, priority=5, ttl_minutes=60):
     """写入一条待播报通知。dedupe_key 重复时静默忽略。
 
@@ -138,7 +136,7 @@ def enqueue(kind, text, dedupe_key=None, priority=5, ttl_minutes=60):
             datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
         ).isoformat(timespec="seconds")
 
-    with _connect() as conn:
+    with _write_connect() as conn:
         cursor = conn.execute(
             """
             INSERT OR IGNORE INTO notify_outbox
@@ -158,7 +156,7 @@ def enqueue(kind, text, dedupe_key=None, priority=5, ttl_minutes=60):
 def expire_stale():
     """把已过期或重试次数过多的 pending 记录标记为 expired。"""
     current = now_utc()
-    with _connect() as conn:
+    with _write_connect() as conn:
         conn.execute(
             """
             UPDATE notify_outbox
@@ -185,7 +183,7 @@ def recover_zombie(seconds=120):
         datetime.now(timezone.utc) - timedelta(seconds=seconds)
     ).isoformat(timespec="seconds")
 
-    with _connect() as conn:
+    with _write_connect() as conn:
         conn.execute(
             """
             UPDATE notify_outbox
@@ -211,6 +209,7 @@ def enabled_kinds():
     return kinds
 
 
+@retry_locked
 def claim_one(kinds=None):
     """原子领取一条优先级最高的待播报通知。"""
     expire_stale()
@@ -225,12 +224,13 @@ def claim_one(kinds=None):
     current = now_utc()
 
     for _ in range(3):
-        with _connect() as conn:
+        with _write_connect() as conn:
             row = conn.execute(
                 f"""
                 SELECT id, kind, priority, text
                 FROM notify_outbox
                 WHERE status = 'pending'
+                  AND acked_at_utc IS NULL
                   AND kind IN ({placeholders})
                   AND (expires_at_utc IS NULL OR expires_at_utc > ?)
                 ORDER BY priority ASC, id ASC
@@ -247,6 +247,7 @@ def claim_one(kinds=None):
                 UPDATE notify_outbox
                 SET status = 'claimed', claimed_at_utc = ?
                 WHERE id = ? AND status = 'pending'
+                  AND acked_at_utc IS NULL
                 """,
                 (now_utc(), row["id"]),
             )
@@ -278,6 +279,7 @@ def claim_batch(max_items=3, kinds=None):
     return batch
 
 
+@retry_locked
 def mark_sent(notify_ids):
     if isinstance(notify_ids, int):
         notify_ids = [notify_ids]
@@ -286,7 +288,7 @@ def mark_sent(notify_ids):
         return
 
     placeholders = ",".join("?" for _ in notify_ids)
-    with _connect() as conn:
+    with _write_connect() as conn:
         conn.execute(
             f"""
             UPDATE notify_outbox
@@ -297,6 +299,7 @@ def mark_sent(notify_ids):
         )
 
 
+@retry_locked
 def mark_failed(notify_ids, error):
     if isinstance(notify_ids, int):
         notify_ids = [notify_ids]
@@ -306,7 +309,7 @@ def mark_failed(notify_ids, error):
 
     message = str(error)[:300]
     placeholders = ",".join("?" for _ in notify_ids)
-    with _connect() as conn:
+    with _write_connect() as conn:
         conn.execute(
             f"""
             UPDATE notify_outbox
@@ -328,6 +331,30 @@ def mark_failed(notify_ids, error):
         )
 
 
+@retry_locked
+def mark_pending(notify_ids, reason=""):
+    """Return claimed notifications to pending without consuming retries."""
+    if isinstance(notify_ids, int):
+        notify_ids = [notify_ids]
+
+    if not notify_ids:
+        return
+
+    placeholders = ",".join("?" for _ in notify_ids)
+    with _write_connect() as conn:
+        conn.execute(
+            f"""
+            UPDATE notify_outbox
+            SET status = 'pending',
+                claimed_at_utc = NULL,
+                last_error = ?
+            WHERE id IN ({placeholders})
+            """,
+            (str(reason)[:300], *notify_ids),
+        )
+
+
+@retry_locked
 def mark_acked(notify_ids):
     """Record client ACK and close the matching shared reminder delivery."""
     if not notify_ids:
@@ -335,7 +362,7 @@ def mark_acked(notify_ids):
 
     acked_at = now_utc()
     placeholders = ",".join("?" for _ in notify_ids)
-    with _connect() as conn:
+    with _write_connect() as conn:
         # Delivery IDs are encoded in dedupe_key for todo reminders.
         rows = conn.execute(
             f"""
@@ -350,12 +377,7 @@ def mark_acked(notify_ids):
                 delivery_id = int(row["dedupe_key"].split(":", 1)[1])
             except (TypeError, ValueError):
                 continue
-            try:
-                import echomate_store
-                echomate_store.acknowledge_delivery(delivery_id)
-            except Exception:
-                # ACK bookkeeping must not break the deskbot playback flow.
-                pass
+            echomate_store.acknowledge_delivery(delivery_id, conn=conn)
 
         cursor = conn.execute(
             f"""
@@ -364,6 +386,62 @@ def mark_acked(notify_ids):
             WHERE id IN ({placeholders}) AND acked_at_utc IS NULL
             """,
             (acked_at, *notify_ids),
+        )
+        return cursor.rowcount
+
+
+@retry_locked
+def mark_playback_failed(notify_ids, reason):
+    """Close a notification after a client playback timeout/error."""
+    if isinstance(notify_ids, int):
+        notify_ids = [notify_ids]
+    if not notify_ids:
+        return 0
+
+    placeholders = ",".join("?" for _ in notify_ids)
+    message = str(reason or "playback failed")[:300]
+    delivery_ids = []
+    with _write_connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT dedupe_key FROM notify_outbox
+            WHERE id IN ({placeholders})
+              AND dedupe_key LIKE 'todo-delivery:%'
+            """,
+            tuple(notify_ids),
+        ).fetchall()
+        for row in rows:
+            try:
+                delivery_ids.append(
+                    int(row["dedupe_key"].split(":", 1)[1])
+                )
+            except (TypeError, ValueError):
+                continue
+
+        if delivery_ids:
+            delivery_placeholders = ",".join("?" for _ in delivery_ids)
+            conn.execute(
+                f"""
+                UPDATE reminder_deliveries
+                SET status = 'failed',
+                    last_error = ?,
+                    last_attempt_at_utc = ?
+                WHERE id IN ({delivery_placeholders})
+                  AND acked_at_utc IS NULL
+                """,
+                (message, now_utc(), *delivery_ids),
+            )
+
+        cursor = conn.execute(
+            f"""
+            UPDATE notify_outbox
+            SET status = 'failed',
+                claimed_at_utc = NULL,
+                last_error = ?
+            WHERE id IN ({placeholders})
+              AND acked_at_utc IS NULL
+            """,
+            (message, *notify_ids),
         )
         return cursor.rowcount
 
@@ -431,10 +509,11 @@ def get_setting(key, default=""):
     return value
 
 
+@retry_locked
 def set_setting(key, value):
     global _setting_cache_at
 
-    with _connect() as conn:
+    with _write_connect() as conn:
         conn.execute(
             """
             INSERT INTO app_settings (key, value, updated_at_utc)

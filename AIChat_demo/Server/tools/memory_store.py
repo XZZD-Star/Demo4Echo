@@ -4,10 +4,11 @@
 """
 
 import re
-import sqlite3
-from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+from sqlite_db import connect as sqlite_connect
+from sqlite_db import retry_locked
 
 DB_PATH = Path("/var/lib/echomate/assistant.db")
 
@@ -22,24 +23,19 @@ def now_utc():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-@contextmanager
 def _connect():
-    conn = sqlite3.connect(str(DB_PATH), timeout=15)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    return sqlite_connect(DB_PATH)
+
+
+def _write_connect():
+    return sqlite_connect(DB_PATH, write=True)
 
 
 def init_memory_tables():
     """建立候选表，并给正式记忆补 category；可重复调用。"""
     with _connect() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
+    with _write_connect() as conn:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS memory_candidates (
@@ -111,6 +107,7 @@ def find_conflicts(owner_id, content, category):
     return conflicts
 
 
+@retry_locked
 def enqueue_candidate(owner_id, content, source="ai_chat", category=None):
     """创建候选；重复候选直接更新时间。"""
     content = (content or "").strip()
@@ -121,7 +118,7 @@ def enqueue_candidate(owner_id, content, source="ai_chat", category=None):
 
     category = category or detect_category(content)
 
-    with _connect() as conn:
+    with _write_connect() as conn:
         existing = conn.execute(
             """
             SELECT id FROM memory_candidates
@@ -164,12 +161,13 @@ def list_candidates(owner_id, limit=10):
     return [dict(row) for row in rows]
 
 
+@retry_locked
 def decide_candidate(owner_id, candidate_id, decision):
     """decision 只允许 accept / reject。"""
     if decision not in ("accept", "reject"):
         return False
 
-    with _connect() as conn:
+    with _write_connect() as conn:
         row = conn.execute(
             """
             SELECT id, category, content
@@ -203,8 +201,9 @@ def decide_candidate(owner_id, candidate_id, decision):
     return True
 
 
+@retry_locked
 def reject_all_candidates(owner_id):
-    with _connect() as conn:
+    with _write_connect() as conn:
         cursor = conn.execute(
             """
             UPDATE memory_candidates
@@ -216,8 +215,9 @@ def reject_all_candidates(owner_id):
         return cursor.rowcount
 
 
+@retry_locked
 def delete_memory(owner_id, memory_id):
-    with _connect() as conn:
+    with _write_connect() as conn:
         cursor = conn.execute(
             "DELETE FROM memories WHERE id = ? AND owner_id = ?",
             (memory_id, owner_id),
@@ -225,8 +225,9 @@ def delete_memory(owner_id, memory_id):
         return cursor.rowcount > 0
 
 
+@retry_locked
 def clear_memories(owner_id):
-    with _connect() as conn:
+    with _write_connect() as conn:
         cursor = conn.execute(
             "DELETE FROM memories WHERE owner_id = ?", (owner_id,)
         )

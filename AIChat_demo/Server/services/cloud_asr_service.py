@@ -28,9 +28,17 @@ class CloudASRService:
     无语音或连接失败时调用 on_no_speech。
     """
 
-    def __init__(self, on_result, on_no_speech):
+    def __init__(
+        self,
+        on_result,
+        on_no_speech,
+        on_ready=None,
+        on_speech_started=None,
+    ):
         self.on_result = on_result
         self.on_no_speech = on_no_speech
+        self.on_ready = on_ready
+        self.on_speech_started = on_speech_started
 
         self.api_key = global_settings.DASHSCOPE_API_KEY
         if not self.api_key:
@@ -54,6 +62,7 @@ class CloudASRService:
         self._terminal_lock = threading.Lock()
 
         self._terminal = False
+        self._ready_notified = False
         self._speech_started = False
         self._sent_audio_seconds = 0.0
         self._first_audio_sent_at = None
@@ -168,7 +177,11 @@ class CloudASRService:
         非阻塞地提交一个解码后的 PCM 音频块。
         允许客户端 40ms 音频帧进入队列，由发送线程串行发送。
         """
-        if self._stop.is_set() or self._input_finished.is_set():
+        if (
+            self._stop.is_set()
+            or self._input_finished.is_set()
+            or not self._ready.is_set()
+        ):
             return
 
         if not isinstance(pcm_data, (bytes, bytearray)):
@@ -203,7 +216,7 @@ class CloudASRService:
             "turn_detection": {
                 "type": "server_vad",
                 "threshold": 0.2,
-                "silence_duration_ms": 400,
+                "silence_duration_ms": 800,
             },
         }
 
@@ -227,10 +240,22 @@ class CloudASRService:
         elif event_type == "session.updated":
             logger.info("云端 ASR 会话配置成功，开始发送音频。")
             self._ready.set()
+            if not self._ready_notified:
+                self._ready_notified = True
+                if self.on_ready is not None:
+                    try:
+                        self.on_ready()
+                    except Exception:
+                        logger.exception("处理云端 ASR Ready 回调失败。")
 
         elif event_type == "input_audio_buffer.speech_started":
             self._speech_started = True
             logger.info("云端 VAD 检测到语音开始。")
+            if self.on_speech_started is not None:
+                try:
+                    self.on_speech_started()
+                except Exception:
+                    logger.exception("处理云端 ASR 语音开始回调失败。")
 
         elif event_type == "input_audio_buffer.speech_stopped":
             logger.info("云端 VAD 检测到语音结束。")

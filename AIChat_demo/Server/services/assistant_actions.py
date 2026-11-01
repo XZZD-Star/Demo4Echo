@@ -73,6 +73,31 @@ def _parse_local_datetime(text):
     return dt.astimezone(LOCAL_TZ)
 
 
+def format_due_speech(due, now=None):
+    """Format a due datetime for Chinese speech without relying on the LLM."""
+    due = due.astimezone(LOCAL_TZ)
+    now = (now or datetime.now(LOCAL_TZ)).astimezone(LOCAL_TZ)
+    days = (due.date() - now.date()).days
+    day_text = {0: "今天", 1: "明天", 2: "后天"}.get(days)
+    if day_text is None:
+        day_text = f"{due.month}月{due.day}日"
+
+    period = "凌晨"
+    if 6 <= due.hour < 12:
+        period = "上午"
+    elif 12 <= due.hour < 14:
+        period = "中午"
+    elif 14 <= due.hour < 18:
+        period = "下午"
+    elif due.hour >= 18:
+        period = "晚上"
+
+    hour = due.hour % 12 or 12
+    if due.minute:
+        return f"{day_text}{period}{hour}点{due.minute}分"
+    return f"{day_text}{period}{hour}点"
+
+
 CHINESE_DIGITS = {
     "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3,
     "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
@@ -83,65 +108,90 @@ def _small_number(value):
     value = (value or "").strip()
     if value.isdigit():
         return int(value)
-    if value in CHINESE_DIGITS:
+    if not value or any(ch not in CHINESE_DIGITS and ch != "十" for ch in value):
+        return None
+    if "十" in value:
+        left, right = value.split("十", 1)
+        tens = CHINESE_DIGITS.get(left, 1) if left else 1
+        ones = CHINESE_DIGITS.get(right, 0) if right else 0
+        return tens * 10 + ones
+    if len(value) == 1:
         return CHINESE_DIGITS[value]
-    if value == "十":
-        return 10
-    if value.startswith("十") and len(value) == 2 and value[1] in CHINESE_DIGITS:
-        return 10 + CHINESE_DIGITS[value[1]]
-    if len(value) == 2 and value[0] in CHINESE_DIGITS and value[1] == "十":
-        return CHINESE_DIGITS[value[0]] * 10
-    if len(value) == 3 and value[0] in CHINESE_DIGITS and value[1] == "十" and value[2] in CHINESE_DIGITS:
-        return CHINESE_DIGITS[value[0]] * 10 + CHINESE_DIGITS[value[2]]
-    return None
+    # Normalize spoken digits such as 零三 / 一五 / 二零.
+    digits = "".join(str(CHINESE_DIGITS[ch]) for ch in value)
+    return int(digits)
 
 
-def infer_due_at(text):
-    """Small deterministic fallback for common Chinese date/time phrases."""
-    raw = (text or "").strip()
-    now = datetime.now(LOCAL_TZ)
+TIME_NUMBER = r"[0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3}"
 
-    day = None
-    if "后天" in raw:
-        day = now.date() + timedelta(days=2)
-    elif "明天" in raw:
-        day = now.date() + timedelta(days=1)
-    elif "今天" in raw:
-        day = now.date()
 
-    hour = minute = None
+def _parse_clock(text):
+    """Parse one clock expression and return (hour, minute, has_period)."""
     match = re.search(
-        r"(?:早上|上午|中午|下午|晚上)?\s*"
-        r"([0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*"
-        r"(?:点|时|[:：.．])\s*(半|([0-9]{1,2})分?)?",
-        raw,
+        r"(?:(今晚|今早|今儿|早上|上午|中午|下午|晚上)\s*)?"
+        rf"({TIME_NUMBER})\s*(?:点|时|[:：.．])\s*"
+        rf"(?:(半)|({TIME_NUMBER})\s*分?)?",
+        text or "",
     )
-    if match:
-        hour = _small_number(match.group(1))
-        tail = match.group(2)
-        if hour is None:
-            return None
-        if tail == "半":
-            minute = 30
-        elif match.group(3):
-            minute = int(match.group(3))
-        else:
-            minute = 0
-        if any(word in raw for word in ("下午", "晚上")) and hour < 12:
-            hour += 12
-        elif "中午" in raw and hour < 11:
-            hour += 12
-
-    if day is None:
-        day = now.date()
+    if not match:
+        return None
+    period, hour_text, half, minute_text = match.groups()
+    hour = _small_number(hour_text)
     if hour is None:
         return None
+    if half:
+        minute = 30
+    elif minute_text:
+        minute = _small_number(minute_text)
+    else:
+        minute = 0
+    if minute is None or minute < 0 or minute > 59:
+        return None
+    if period in ("下午", "晚上", "今晚") and hour < 12:
+        hour += 12
+    elif period == "中午" and hour < 11:
+        hour += 12
+    elif period in ("早上", "今早") and hour == 12:
+        hour = 0
+    if hour > 23:
+        return None
+    return hour, minute, bool(period)
 
+
+def infer_due_at(text, now=None):
+    """Understand common Chinese dates and clock expressions.
+
+    The LLM owns semantic interpretation. This helper only handles explicit
+    date/time phrases and returns None when a bare clock is ambiguous.
+    """
+    raw = (text or "").strip()
+    now = now or datetime.now(LOCAL_TZ)
+    date_match = re.search(r"(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?", raw)
+    if date_match:
+        year, month, day = map(int, date_match.groups())
+    else:
+        date_match = re.search(r"(今天|明天|后天)", raw)
+        if date_match:
+            offset = {"今天": 0, "明天": 1, "后天": 2}[date_match.group(1)]
+            date_value = now.date() + timedelta(days=offset)
+            year, month, day = date_value.year, date_value.month, date_value.day
+        else:
+            year, month, day = now.year, now.month, now.day
+
+    clock = _parse_clock(raw)
+    if clock is None:
+        return None
+    hour, minute, has_period = clock
     try:
-        return datetime(day.year, day.month, day.day, hour, minute, tzinfo=LOCAL_TZ)
+        due = datetime(year, month, day, hour, minute, tzinfo=LOCAL_TZ)
     except ValueError:
         return None
 
+    # A bare clock already in the past is ambiguous, not automatically
+    # tomorrow: ask the model/user to clarify instead of inventing a date.
+    if not has_period and due <= now:
+        return None
+    return due
 
 def _clean_title(text, due_at):
     raw = (text or "").strip()
@@ -150,9 +200,9 @@ def _clean_title(text, due_at):
     # Match the full leading date/time prefix once. Using a fixed prefix is
     # less error-prone than trying several overlapping partial regexes.
     date_part = (
-        r"(?:今天|明天|后天)?\s*(?:早上|上午|中午|下午|晚上)?\s*"
+        r"(?:(?:今天|明天|后天)?\s*(?:早上|上午|中午|下午|晚上)?\s*"
         r"(?:[0-9]{1,2}|[零〇一二两三四五六七八九十]{1,3})\s*"
-        r"(?:点|时|:|：)\s*(?:半|[0-9]{1,2}分?)?"
+        r"(?:点|时|:|：)\s*(?:半|[0-9零〇一二两三四五六七八九十]{1,2}分?)?)"
     )
     reminder = re.search(r"(?:提醒我|提醒一下|记得提醒我|别忘了)", raw)
     if reminder:
@@ -202,6 +252,7 @@ def create_todo_from_text(owner_id, text, source="deskbot", chat_id="",
         "title": title,
         "due_local": due.isoformat(timespec="minutes"),
         "due_text": due.strftime("%Y-%m-%d %H:%M"),
+        "due_speech": format_due_speech(due),
     }
 
 
@@ -211,11 +262,18 @@ def execute_tool_call(name, arguments, owner_id, source, chat_id=""):
             args = json.loads(arguments or "{}")
         except (TypeError, json.JSONDecodeError):
             args = {}
-        title = str(args.get("title") or "").strip()
+        title = str(
+            args.get("title")
+            or args.get("content")
+            or args.get("description")
+            or ""
+        ).strip()
         due_text = str(args.get("due_at") or "").strip()
         due = _parse_local_datetime(due_text)
-        if not title or due is None:
-            return {"ok": False, "error": "待办标题或时间无效"}
+        if not title:
+            return {"ok": False, "error": "empty"}
+        if due is None:
+            return {"ok": False, "error": "bad_due"}
 
         notify_deskbot = args.get("notify_deskbot", True)
         notify_feishu = args.get("notify_feishu", True)
@@ -241,6 +299,7 @@ def execute_tool_call(name, arguments, owner_id, source, chat_id=""):
             "todo_id": todo_id,
             "title": title,
             "due_text": due.strftime("%Y-%m-%d %H:%M"),
+            "due_speech": format_due_speech(due),
         }
 
     if name == "propose_memory":
