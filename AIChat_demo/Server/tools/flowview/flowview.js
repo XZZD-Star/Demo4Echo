@@ -353,11 +353,17 @@
     const idleEvents = clientEvents.filter(
       (event) => eventState(event) === "idle",
     );
+    const ttsAudioIndex = events.findIndex(
+      (event) => event.component === "tts"
+        && event.step === "first_audio",
+    );
     const ttsStartIndex = events.findIndex(
       (event) => event.component === "tts" && event.step === "start",
     );
+    const playbackAnchor = Math.max(ttsAudioIndex, ttsStartIndex);
     const playbackEvents = speakingEvents.filter(
-      (event) => ttsStartIndex >= 0 && events.indexOf(event) > ttsStartIndex,
+      (event) => playbackAnchor >= 0
+        && events.indexOf(event) > playbackAnchor,
     );
     return [
       { name: "唤醒", events: speakingEvents.slice(0, 1) },
@@ -432,13 +438,27 @@
     return "info";
   };
 
-  const renderStages = (stages) => {
-    el.stageRail.innerHTML = stages.map((stage) => {
+  const renderStages = (stages, overallStatus) => {
+    const lastReached = stages.reduce(
+      (last, stage, index) => stage.events.length ? index : last,
+      -1,
+    );
+    el.stageRail.innerHTML = stages.map((stage, index) => {
       const status = stageStatus(stage.events);
       const duration = stageDuration(stage.events);
       const note = stage.events.length ? `${stage.events.length} 条` : "未收到";
+      const reached = index <= lastReached && stage.events.length > 0;
+      const current = reached
+        && index === lastReached
+        && !["ok", "warn", "error"].includes(overallStatus);
+      const classes = [
+        "stage",
+        `is-${status}`,
+        reached ? "is-reached" : "is-pending",
+        current ? "is-current" : "",
+      ].filter(Boolean).join(" ");
       return `
-        <div class="stage is-${status}">
+        <div class="${classes}">
           <span class="stage-name">${escapeHtml(stage.name)}</span>
           <span class="stage-value">${duration === null ? "-" : escapeHtml(formatDuration(duration))}</span>
           <span class="stage-note">${escapeHtml(note)}</span>
@@ -486,7 +506,7 @@
           : "进行中";
     el.flowStatus.className = `summary-status is-${status}`;
     el.flowMeta.textContent = formatClock(events[events.length - 1]?.ts);
-    renderStages(stages);
+    renderStages(stages, status);
     renderRows(el.flowLogViewport, events, el.flowEmpty, "该流程暂无事件");
     updateCounters();
   };

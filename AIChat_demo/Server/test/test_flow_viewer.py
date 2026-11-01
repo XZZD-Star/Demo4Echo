@@ -63,6 +63,17 @@ class FlowLogTests(unittest.TestCase):
         self.assertEqual(event["detail"]["value"], "visible")
         self.assertEqual(event["schema"], 1)
 
+    def test_stage_progress_assets_cover_audio_and_status_colors(self):
+        root = Path(__file__).resolve().parents[1] / "tools" / "flowview"
+        script = (root / "flowview.js").read_text(encoding="utf-8")
+        styles = (root / "flowview.css").read_text(encoding="utf-8")
+
+        self.assertIn('event.step === "first_audio"', script)
+        self.assertIn("is-reached", script)
+        self.assertIn("is-current", script)
+        self.assertIn("stagePulse", styles)
+        self.assertIn("grid-auto-flow: column", styles)
+
 
 if __name__ == "__main__":
     unittest.main()
