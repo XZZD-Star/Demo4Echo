@@ -23,6 +23,9 @@ class FakeSynthesizer:
     def streaming_complete(self):
         self.complete_calls += 1
 
+    def streaming_cancel(self):
+        pass
+
     def get_last_request_id(self):
         return "fake-request"
 
@@ -43,7 +46,7 @@ class TTSLifecycleTest(unittest.TestCase):
             self.assertTrue(model.tts_stream_speech_synthesis("你好"))
             self.assertTrue(model.tts_stream_close())
 
-        synth = model.synthesizer
+        synth = model.session.synthesizer
         self.assertEqual(synth.calls, ["", "你好"])
         self.assertEqual(synth.complete_calls, 1)
         self.assertFalse(model.is_ready())
@@ -57,9 +60,34 @@ class TTSLifecycleTest(unittest.TestCase):
             self.assertFalse(model.tts_stream_speech_synthesis("你好"))
             self.assertFalse(model.tts_stream_close())
 
-        synth = model.synthesizer
+        synth = model.session.synthesizer
         self.assertEqual(synth.calls, [""])
         self.assertEqual(synth.complete_calls, 0)
+
+    def test_close_callback_invalidates_current_session(self):
+        model = self._model()
+        with patch("models.tts_model.SpeechSynthesizer", FakeSynthesizer):
+            self.assertTrue(model.tts_stream_set())
+            self.assertTrue(model.is_ready())
+            model.session.callback.on_close()
+            self.assertFalse(model.is_ready())
+
+    def test_error_callback_invalidates_current_session(self):
+        model = self._model()
+        with patch("models.tts_model.SpeechSynthesizer", FakeSynthesizer):
+            self.assertTrue(model.tts_stream_set())
+            model.session.callback.on_error("idle timeout")
+            self.assertFalse(model.is_ready())
+            self.assertIn("idle timeout", model.last_error())
+
+    def test_stale_close_callback_does_not_invalidate_new_session(self):
+        model = self._model()
+        with patch("models.tts_model.SpeechSynthesizer", FakeSynthesizer):
+            self.assertTrue(model.tts_stream_set())
+            old_session = model.session
+            self.assertTrue(model.tts_stream_set())
+            old_session.callback.on_close()
+            self.assertTrue(model.is_ready())
 
     def test_service_returns_failure_and_creates_fresh_object(self):
         from services.tts_service import TTSService
@@ -74,6 +102,20 @@ class TTSLifecycleTest(unittest.TestCase):
         FakeSynthesizer.fail_preopen = False
         with patch("models.tts_model.SpeechSynthesizer", FakeSynthesizer):
             self.assertTrue(service.tts_set())
+            self.assertTrue(service.tts_speech_stream("你好"))
+            self.assertTrue(service.tts_close())
+
+    def test_service_reopens_after_idle_close(self):
+        from services.tts_service import TTSService
+
+        with patch("models.tts_model.SpeechSynthesizer", FakeSynthesizer):
+            service = TTSService()
+            self.assertTrue(service.tts_set())
+            old_session = service.tts_model.session
+            old_session.callback.on_close()
+            self.assertFalse(service.is_ready())
+            self.assertTrue(service.tts_set())
+            self.assertIsNot(service.tts_model.session, old_session)
             self.assertTrue(service.tts_speech_stream("你好"))
             self.assertTrue(service.tts_close())
 
@@ -105,6 +147,9 @@ class TTSLifecycleTest(unittest.TestCase):
 
             def last_error(self):
                 return None
+
+            def session_id(self):
+                return "fake"
 
         manager = ServiceManager.__new__(ServiceManager)
         manager._tts_lock = threading.Lock()

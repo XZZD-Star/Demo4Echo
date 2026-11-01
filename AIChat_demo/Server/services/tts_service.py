@@ -31,3 +31,6 @@ class TTSService:
 
     def last_error(self):
         return self.tts_model.last_error()
+
+    def session_id(self):
+        return self.tts_model.session_id()

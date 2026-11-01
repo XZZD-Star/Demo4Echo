@@ -211,20 +211,33 @@ class ServiceManager:
         return self._set_tts_callbacks(epoch)
 
     def _set_tts_callbacks(self, epoch):
-        return self.tts_service.tts_set(
+        opened = self.tts_service.tts_set(
             on_data=lambda data: self._tts_on_data(data, epoch),
             on_complete=lambda: self._tts_on_complete(epoch),
             on_error=lambda message: self._tts_on_error(message, epoch),
         )
+        flow_log.emit(
+            "tts",
+            "session_open",
+            "ok" if opened else "error",
+            trace_id=self._active_chat_trace_id,
+            message=f"session={self.tts_service.session_id()}",
+        )
+        return opened
 
     def _ensure_tts_ready(self, epoch):
         if self.tts_service.is_ready():
-            return
+            return epoch
+        epoch = self._invalidate_tts()
+        with self._tts_lock:
+            self._tts_active = True
+            self._tts_active_epoch = epoch
         if not self._set_tts_callbacks(epoch):
             raise RuntimeError(
                 self.tts_service.last_error()
                 or "TTS 预打开失败"
             )
+        return epoch
 
     def _tts_is_active(self, epoch):
         with self._tts_lock:
@@ -452,7 +465,7 @@ class ServiceManager:
                 epoch = self._tts_epoch
                 self._tts_active = True
                 self._tts_active_epoch = epoch
-            self._ensure_tts_ready(epoch)
+            epoch = self._ensure_tts_ready(epoch)
             if not self.tts_service.tts_speech_stream(text):
                 raise RuntimeError(
                     self.tts_service.last_error()
@@ -466,7 +479,9 @@ class ServiceManager:
             return True
         except Exception as exc:
             logger.exception("对话回复 TTS 失败")
-            self._tts_on_error(exc, epoch)
+            with self._tts_lock:
+                error_epoch = self._tts_active_epoch or epoch
+            self._tts_on_error(exc, error_epoch)
             return False
 
     def _stream_reply_to_tts(self, answer_stream, turn_id):
@@ -481,7 +496,7 @@ class ServiceManager:
             self._tts_active_epoch = epoch
 
         try:
-            self._ensure_tts_ready(epoch)
+            epoch = self._ensure_tts_ready(epoch)
             collected = []
             pending = ""
             first_token_seen = False
@@ -558,7 +573,9 @@ class ServiceManager:
             return reply
         except Exception as exc:
             logger.exception("流式回复 TTS 失败")
-            self._tts_on_error(exc, epoch)
+            with self._tts_lock:
+                error_epoch = self._tts_active_epoch or epoch
+            self._tts_on_error(exc, error_epoch)
             return None
 
     def _finish_chat_reply(self, turn_id):
