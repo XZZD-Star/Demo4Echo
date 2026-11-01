@@ -13,6 +13,7 @@ from service_manager import ServiceManager
 from services.notify_service import NotifyService
 from services.reminder_service import DeskbotReminderService
 from tools import notify_store
+from tools import flow_log
 from tools.logger import logger
 
 
@@ -37,6 +38,24 @@ class NotifyThread(threading.Thread):
         self._hour_window_start = 0.0
         self._hour_count = 0
         self.reminder_service = DeskbotReminderService()
+        self._heartbeat_lock = threading.Lock()
+        self._heartbeat_at = 0.0
+        self._active_trace_id = None
+        self._tts_first_data_seen = False
+
+    def _beat(self):
+        with self._heartbeat_lock:
+            self._heartbeat_at = time.monotonic()
+
+    def heartbeat_age(self):
+        with self._heartbeat_lock:
+            heartbeat_at = self._heartbeat_at
+        if heartbeat_at <= 0:
+            return float("inf")
+        return max(0.0, time.monotonic() - heartbeat_at)
+
+    def is_healthy(self, max_age_seconds=90.0):
+        return self.is_alive() and self.heartbeat_age() <= max_age_seconds
 
     # ---------- 音频缓冲 ----------
 
@@ -44,6 +63,14 @@ class NotifyThread(threading.Thread):
         """把 TTS 音频按 40ms 帧对齐后推入播放队列。"""
         if not data:
             return
+
+        if not self._tts_first_data_seen:
+            self._tts_first_data_seen = True
+            flow_log.emit(
+                "tts", "first_audio", "ok",
+                trace_id=self._active_trace_id,
+                message=f"bytes={len(data)}",
+            )
 
         self._buffer.extend(data)
 
@@ -139,12 +166,34 @@ class NotifyThread(threading.Thread):
             time.sleep(0.05)
         return False
 
+    def _send_tts_error(self, reason):
+        flow_log.emit(
+            "tts", "error", "error",
+            trace_id=self._active_trace_id,
+            message=reason,
+        )
+        self.service_manager.ws_send_queue.put(
+            json.dumps({
+                "type": "tts",
+                "state": "error",
+                "reason": reason,
+            })
+        )
+
     def _play(self, rows):
         manager = self.service_manager
         notify_ids = [row["id"] for row in rows]
         notify_id = notify_ids[0]
         kind = rows[0]["kind"]
         text = self._merge_text(rows)
+        self._active_trace_id = f"notify-{notify_id}"
+        self._tts_first_data_seen = False
+        flow_log.emit(
+            "notify", "claimed", "info",
+            trace_id=self._active_trace_id,
+            notify_id=notify_id,
+            message=f"kind={kind} count={len(rows)}",
+        )
 
         if not self._wait_audio_idle():
             logger.warning("播放队列未清空，延后播报通知 #%s。", notify_id)
@@ -166,12 +215,23 @@ class NotifyThread(threading.Thread):
             manager.ws_send_queue.put(
                 json.dumps(payload, ensure_ascii=False)
             )
+            flow_log.emit(
+                "notify", "sent", "info",
+                trace_id=self._active_trace_id,
+                notify_id=notify_id,
+                message=kind,
+            )
             logger.info(
                 "开始播报通知 %s（%s，%d 条）：%s",
                 notify_ids,
                 kind,
                 len(rows),
                 text,
+            )
+            flow_log.emit(
+                "tts", "start", "info",
+                trace_id=self._active_trace_id,
+                notify_id=notify_id,
             )
 
             ok = self.notify_service.speak(
@@ -182,6 +242,7 @@ class NotifyThread(threading.Thread):
             self._flush_buffer()
 
             if not ok:
+                self._send_tts_error("synthesis_failed")
                 notify_store.mark_failed(notify_ids, "tts failed")
                 return False
 
@@ -192,12 +253,23 @@ class NotifyThread(threading.Thread):
             )
 
             notify_store.mark_sent(notify_ids)
+            flow_log.emit(
+                "tts", "complete", "ok",
+                trace_id=self._active_trace_id,
+                notify_id=notify_id,
+            )
+            flow_log.emit(
+                "notify", "playback_sent", "complete",
+                trace_id=self._active_trace_id,
+                notify_id=notify_id,
+            )
             self._hour_count += 1
             self._last_play_at = time.monotonic()
             logger.info("通知 %s 播报完成。", notify_ids)
             return True
 
         except Exception as exc:
+            self._send_tts_error("synthesis_exception")
             logger.exception("播报通知 %s 异常：%s", notify_ids, exc)
             notify_store.mark_failed(notify_ids, exc)
             return False
@@ -205,12 +277,15 @@ class NotifyThread(threading.Thread):
         finally:
             manager.notify_playing = False
             manager.conversation_busy.clear()
+            self._active_trace_id = None
+            self._tts_first_data_seen = False
 
     # ---------- 主循环 ----------
 
     def run(self):
+        self._beat()
         logger.info(
-            "主动播报线程已启动（启用=%s，轮询=%s 秒，静音=%s）。",
+            "主动播报与提醒调度线程已启动（启用=%s，轮询=%s 秒，静音=%s）。",
             global_settings.NOTIFY_ENABLED,
             global_settings.NOTIFY_POLL_SECONDS,
             notify_store.quiet_text(),
@@ -228,6 +303,7 @@ class NotifyThread(threading.Thread):
             logger.error("初始化通知表失败：%s", exc)
 
         while not self.service_manager.stop_event.is_set():
+            self._beat()
             try:
                 # Pull due todos into independent deskbot/feishu deliveries.
                 # This remains safe when the Feishu process is unavailable.
@@ -245,7 +321,10 @@ class NotifyThread(threading.Thread):
                 self._play(rows)
 
             except Exception as exc:
-                logger.exception("播报线程异常：%s", exc)
+                try:
+                    logger.exception("播报线程异常：%s", exc)
+                except Exception:
+                    pass
                 time.sleep(global_settings.NOTIFY_POLL_SECONDS)
 
         logger.info("主动播报线程已退出。")

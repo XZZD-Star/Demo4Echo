@@ -10,6 +10,7 @@ from service_manager import ServiceManager
 import sys
 sys.path.append("..")
 from tools.logger import logger
+from tools import flow_log
 
 class WebSocketServer:
     def __init__(self, host="0.0.0.0", port=8000, access_token="123456", device_id="00:11:22:33:44:55", protocol_version=2, service_manager: ServiceManager = None):
@@ -49,6 +50,8 @@ class WebSocketServer:
         """
         # connected
         logger.info("Client connected")
+        flow_log.emit("server", "client_connected", "ok",
+                      message="websocket connected")
         process_task = None
         try:
             # 新连接开始前清掉上一条连接可能残留的音频/文本帧，
@@ -66,6 +69,8 @@ class WebSocketServer:
                 await websocket.send(json.dumps({"type": "auth", "message": "Authentication failed"}))
                 await websocket.close(reason="Authentication failed")
                 logger.error("Authentication failed for client")
+                flow_log.emit("server", "auth", "error",
+                              message="authentication failed")
                 return
 
             # 鉴权通过后，向客户端发送成功响应
@@ -74,6 +79,8 @@ class WebSocketServer:
                 "message": "Client authenticated",
             }
             await websocket.send(json.dumps(response))
+            flow_log.emit("server", "auth", "ok",
+                          message="authentication successful")
 
             # 登记当前连接，供主动播报判断在线状态。
             self.service_manager.client_ws = websocket
@@ -97,11 +104,15 @@ class WebSocketServer:
             if process_task:
                 process_task.cancel()
             logger.info("Client disconnected")
+            flow_log.emit("server", "client_disconnected", "info",
+                          message="websocket disconnected")
             # 清空连接登记与残留数据，避免影响下一次连接。
             self.service_manager.client_ws = None
             self.service_manager.set_client_state("unknown")
             self.service_manager.drain_send_queues()
             self.service_manager.reset_services()
+            self.service_manager.invalidate_chat_turn()
+            self.service_manager.clear_voice_trace()
 
     async def start_server(self):
         """
@@ -109,4 +120,5 @@ class WebSocketServer:
         """
         async with websockets.serve(self.handle_client, self.host, self.port):
             logger.info(f"WebSocket server started on {self.host}:{self.port}")
-            await asyncio.Future()  # 保持服务器运行
+            while not self.service_manager.stop_event.is_set():
+                await asyncio.sleep(0.5)

@@ -43,6 +43,10 @@ try:
 
     service.start()
 
+    if not service._ready.wait(timeout=10):
+        print("云端 ASR 会话配置超时。")
+        sys.exit(2)
+
     # 按 100ms 音频块发送，并模拟实时传输速度。
     chunk_size = 3200
 

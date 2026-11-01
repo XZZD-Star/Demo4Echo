@@ -3,6 +3,7 @@ from service_manager import ServiceManager
 import json
 from tools.logger import logger
 from config.settings import global_settings
+from tools import flow_log
 
 
 class AudioHandler:
@@ -52,6 +53,15 @@ class AudioHandler:
                 elif vad_result == 1:
                     self.service_manager.is_vad = True
                     asr_res = self.service_manager.asr_service.asr_generate_text()
+                    trace_id = (
+                        self.service_manager.active_voice_trace_id()
+                        or self.service_manager.begin_voice_trace()
+                    )
+                    flow_log.emit(
+                        "asr", "final", "ok",
+                        trace_id=trace_id,
+                        message=f"chars={len(asr_res or '')}",
+                    )
                     # asr识别到，然后开一个任务进行对话
                     self.service_manager.task_manager.submit_task(self.service_manager.chat_start_task, asr_res)
                     # 发送asr识别结果
@@ -75,6 +85,15 @@ class AudioHandler:
                 elif vad_result == 3:
                     self.service_manager.is_vad = True
                     asr_res = self.service_manager.asr_service.asr_generate_text()
+                    trace_id = (
+                        self.service_manager.active_voice_trace_id()
+                        or self.service_manager.begin_voice_trace()
+                    )
+                    flow_log.emit(
+                        "asr", "final", "warn",
+                        trace_id=trace_id,
+                        message=f"chars={len(asr_res or '')} buffer_full",
+                    )
                     # asr识别到，然后开一个任务进行对话
                     self.service_manager.task_manager.submit_task(self.service_manager.chat_start_task, asr_res)
                     # 发送asr识别结果
