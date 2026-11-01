@@ -14,6 +14,50 @@ import json
 import os
 import time
 
+TTS_SENTENCE_ENDINGS = frozenset("。！？!?；;\n")
+TTS_SOFT_ENDINGS = frozenset("，,、：:")
+TTS_CHUNK_MAX_CHARS = 24
+
+
+def split_tts_chunks(buffer, final=False):
+    """Split streamed text into TTS-friendly sentence-sized chunks."""
+    chunks = []
+    rest = buffer or ""
+    while rest:
+        window = rest[:TTS_CHUNK_MAX_CHARS]
+        boundary = next(
+            (
+                index + 1
+                for index, char in enumerate(window)
+                if char in TTS_SENTENCE_ENDINGS
+            ),
+            None,
+        )
+        if boundary is None and len(rest) >= TTS_CHUNK_MAX_CHARS:
+            boundary = next(
+                (
+                    index + 1
+                    for index in range(len(window) - 1, -1, -1)
+                    if window[index] in TTS_SOFT_ENDINGS
+                ),
+                TTS_CHUNK_MAX_CHARS,
+            )
+        if boundary is None:
+            break
+
+        chunk = rest[:boundary].strip()
+        if chunk:
+            chunks.append(chunk)
+        rest = rest[boundary:]
+
+    if final:
+        chunk = rest.strip()
+        if chunk:
+            chunks.append(chunk)
+        rest = ""
+    return chunks, rest
+
+
 class ServiceManager:
     def __init__(self):
         # 初始化服务
@@ -172,6 +216,15 @@ class ServiceManager:
             on_complete=lambda: self._tts_on_complete(epoch),
             on_error=lambda message: self._tts_on_error(message, epoch),
         )
+
+    def _ensure_tts_ready(self, epoch):
+        if self.tts_service.is_ready():
+            return
+        if not self._set_tts_callbacks(epoch):
+            raise RuntimeError(
+                self.tts_service.last_error()
+                or "TTS 预打开失败"
+            )
 
     def _tts_is_active(self, epoch):
         with self._tts_lock:
@@ -399,12 +452,7 @@ class ServiceManager:
                 epoch = self._tts_epoch
                 self._tts_active = True
                 self._tts_active_epoch = epoch
-            if not self.tts_service.is_ready():
-                if not self._set_tts_callbacks(epoch):
-                    raise RuntimeError(
-                        self.tts_service.last_error()
-                        or "TTS 预打开失败"
-                    )
+            self._ensure_tts_ready(epoch)
             if not self.tts_service.tts_speech_stream(text):
                 raise RuntimeError(
                     self.tts_service.last_error()
@@ -420,6 +468,98 @@ class ServiceManager:
             logger.exception("对话回复 TTS 失败")
             self._tts_on_error(exc, epoch)
             return False
+
+    def _stream_reply_to_tts(self, answer_stream, turn_id):
+        """Stream ordinary chat text into TTS as soon as sentences form."""
+        if not self.is_chat_turn_active(turn_id):
+            logger.warning("客户端已结束本轮，丢弃迟到回复。")
+            return None
+
+        with self._tts_lock:
+            epoch = self._tts_epoch
+            self._tts_active = True
+            self._tts_active_epoch = epoch
+
+        try:
+            self._ensure_tts_ready(epoch)
+            collected = []
+            pending = ""
+            first_token_seen = False
+            tts_text_seen = False
+
+            for chunk in answer_stream:
+                if not self.is_chat_turn_active(turn_id):
+                    logger.warning("流式回复期间本轮已结束，停止 TTS。")
+                    return None
+                if chunk == -1:
+                    logger.warning("LLM 流式生成返回错误。")
+                    continue
+                if not isinstance(chunk, str) or not chunk:
+                    continue
+
+                if not first_token_seen:
+                    first_token_seen = True
+                    flow_log.emit(
+                        "llm", "first_token", "ok",
+                        trace_id=self._active_chat_trace_id,
+                    )
+                collected.append(chunk)
+                pending += chunk
+                pieces, pending = split_tts_chunks(pending)
+                for piece in pieces:
+                    if not self.tts_service.tts_speech_stream(piece):
+                        raise RuntimeError(
+                            self.tts_service.last_error()
+                            or "TTS 分段合成失败"
+                        )
+                    if not tts_text_seen:
+                        tts_text_seen = True
+                        flow_log.emit(
+                            "tts", "text_ready", "ok",
+                            trace_id=self._active_chat_trace_id,
+                            message=f"chars={len(piece)}",
+                        )
+
+            pieces, _ = split_tts_chunks(pending, final=True)
+            for piece in pieces:
+                if not self.tts_service.tts_speech_stream(piece):
+                    raise RuntimeError(
+                        self.tts_service.last_error()
+                        or "TTS 分段合成失败"
+                    )
+                if not tts_text_seen:
+                    tts_text_seen = True
+                    flow_log.emit(
+                        "tts", "text_ready", "ok",
+                        trace_id=self._active_chat_trace_id,
+                        message=f"chars={len(piece)}",
+                    )
+
+            reply = "".join(collected).strip()
+            if not reply:
+                reply = "抱歉，这次没有生成有效回复，请再说一次。"
+                if not self.tts_service.tts_speech_stream(reply):
+                    raise RuntimeError(
+                        self.tts_service.last_error()
+                        or "TTS 兜底回复失败"
+                    )
+
+            flow_log.emit(
+                "llm", "reply_ready", "ok",
+                trace_id=self._active_chat_trace_id,
+                message=f"chars={len(reply)}",
+            )
+            logger.info("[回复]: %s", reply)
+            if not self.tts_service.tts_close():
+                raise RuntimeError(
+                    self.tts_service.last_error()
+                    or "TTS 关闭失败"
+                )
+            return reply
+        except Exception as exc:
+            logger.exception("流式回复 TTS 失败")
+            self._tts_on_error(exc, epoch)
+            return None
 
     def _finish_chat_reply(self, turn_id):
         """Mark the end of this chat turn after TTS completion."""
@@ -547,11 +687,18 @@ class ServiceManager:
                 self._speak_reply(reply, turn_id)
                 self._finish_chat_reply(turn_id)
                 return
-            reply = "".join(
-                chunk for chunk in answers if isinstance(chunk, str)
-            ).strip()
-            logger.info("[回复]: %s", reply)
-            self._speak_reply(reply, turn_id)
+
+            if history_list:
+                reply = "".join(
+                    chunk for chunk in answers
+                    if isinstance(chunk, str)
+                ).strip()
+                logger.info("[回复]: %s", reply)
+                self._speak_reply(reply, turn_id)
+            else:
+                if isinstance(answers, str):
+                    answers = iter([answers])
+                self._stream_reply_to_tts(answers, turn_id)
             self._finish_chat_reply(turn_id)
         finally:
             flow_log.emit(

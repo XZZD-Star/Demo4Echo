@@ -124,6 +124,67 @@ class TTSLifecycleTest(unittest.TestCase):
         self.assertEqual(manager.tts_service.speech_calls, 1)
         self.assertEqual(manager.tts_service.close_calls, 1)
 
+    def test_split_tts_chunks_prefers_sentence_boundaries(self):
+        from service_manager import split_tts_chunks
+
+        chunks, pending = split_tts_chunks(
+            "你好。今天天气不错，适合出门。"
+        )
+        self.assertEqual(
+            chunks,
+            ["你好。", "今天天气不错，适合出门。"],
+        )
+        self.assertEqual(pending, "")
+
+        chunks, pending = split_tts_chunks("一" * 30)
+        self.assertEqual(len(chunks[0]), 24)
+        self.assertEqual(len(pending), 6)
+
+    def test_stream_reply_sends_each_sentence_once(self):
+        from service_manager import ServiceManager
+
+        class FakeTTSService:
+            def __init__(self):
+                self.texts = []
+                self.close_calls = 0
+
+            def is_ready(self):
+                return True
+
+            def tts_speech_stream(self, text):
+                self.texts.append(text)
+                return True
+
+            def tts_close(self):
+                self.close_calls += 1
+                return True
+
+            def last_error(self):
+                return None
+
+        manager = ServiceManager.__new__(ServiceManager)
+        manager._tts_lock = threading.Lock()
+        manager._tts_epoch = 9
+        manager._tts_active = False
+        manager._tts_active_epoch = None
+        manager.chat_turn_lock = threading.Lock()
+        manager.chat_turn_id = 4
+        manager._active_chat_trace_id = "voice-stream"
+        manager.tts_service = FakeTTSService()
+
+        with patch("service_manager.flow_log.emit"):
+            reply = manager._stream_reply_to_tts(
+                iter(["你好。", "今天天气不错，适合出门。"]),
+                4,
+            )
+
+        self.assertEqual(reply, "你好。今天天气不错，适合出门。")
+        self.assertEqual(
+            manager.tts_service.texts,
+            ["你好。", "今天天气不错，适合出门。"],
+        )
+        self.assertEqual(manager.tts_service.close_calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
