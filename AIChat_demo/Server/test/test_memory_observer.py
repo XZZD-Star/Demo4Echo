@@ -99,6 +99,17 @@ class MemoryObserverTest(unittest.TestCase):
         self.assertEqual(echomate_store.list_chat_memories("owner"), [])
         self.assertEqual(echomate_store.memory_context("owner"), [])
 
+    def test_quiet_window_waits_for_foreground_idle(self):
+        observer = memory_observer.MemoryObserver.__new__(
+            memory_observer.MemoryObserver
+        )
+        observer.delay_seconds = 0.02
+        observer.poll_seconds = 0.005
+        states = iter([False])
+        observer._can_process = lambda: next(states, True)
+        self.assertFalse(observer._wait_for_quiet_window())
+        self.assertTrue(observer._wait_for_quiet_window())
+
 
 if __name__ == "__main__":
     unittest.main()

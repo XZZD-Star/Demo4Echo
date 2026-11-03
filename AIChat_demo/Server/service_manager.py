@@ -96,7 +96,9 @@ class ServiceManager:
         self.chat_service = ChatService()
         self.memory_observer = MemoryObserver(
             self.intent_service.client,
-            self.intent_service.model,
+            global_settings.MEMORY_MODEL,
+            delay_seconds=3.0,
+            can_process=self._memory_worker_can_run,
         )
         self.tts_service = TTSService()
         self.is_vad = False  # 防止VAD发生后还语音加入
@@ -141,6 +143,13 @@ class ServiceManager:
         # 默认的一些意图注册到系统
         global_registry.register_function("continue_chat", "继续聊天意图", {}, continue_chat)
         global_registry.register_function("exit_chat", "结束对话意图", {}, handle_exit_intent)
+
+    def _memory_worker_can_run(self):
+        """Run memory extraction only when foreground voice work is idle."""
+        return (
+            not self.conversation_busy.is_set()
+            and self.client_state in {"idle", "unknown"}
+        )
 
     def has_client(self):
         """是否有客户端在线。"""

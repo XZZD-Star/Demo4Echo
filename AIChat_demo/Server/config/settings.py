@@ -37,6 +37,7 @@ class Settings:
     # 模型配置
     INTENT_MODEL = os.environ.get("INTENT_MODEL", "qwen-max").strip()
     CHAT_MODEL = os.environ.get("CHAT_MODEL", "qwen-max").strip()
+    MEMORY_MODEL = os.environ.get("MEMORY_MODEL", "qwen-plus").strip()
     COSYVOICE_MODEL = os.environ.get(
         "COSYVOICE_MODEL", "cosyvoice-v2"
     ).strip()
