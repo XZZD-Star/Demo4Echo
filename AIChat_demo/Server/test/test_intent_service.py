@@ -90,6 +90,24 @@ class IntentServiceTest(unittest.TestCase):
             result[0]["function_call"]["name"], "continue_chat"
         )
 
+    def test_current_session_recall_uses_working_memory(self):
+        class FailIfCalled:
+            class Chat:
+                class Completions:
+                    def create(self, **kwargs):
+                        raise AssertionError("LLM should not be called")
+
+                completions = Completions()
+
+            chat = Chat()
+
+        result = self._service(FailIfCalled()).detect_intent(
+            "你知道我上一条问了你什么吗？"
+        )
+        self.assertEqual(
+            result[0]["function_call"]["name"], "continue_chat"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

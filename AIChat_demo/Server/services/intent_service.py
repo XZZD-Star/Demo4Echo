@@ -1,6 +1,7 @@
 """Native tool routing for voice chat."""
 
 import json
+import re
 from datetime import datetime
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
@@ -10,6 +11,12 @@ from openai import OpenAI
 import assistant_core
 from config.settings import global_settings
 from tools.logger import logger
+
+_CURRENT_SESSION_RECALL_PATTERN = re.compile(
+    r"我(?:上一条|上一句|上一轮|前一句).{0,16}(?:问|说|聊|提)"
+    r"|(?:刚才|刚刚).{0,16}(?:问|说|聊|提)"
+    r"|(?:记得|知道).{0,8}(?:刚才|刚刚|我上一条|上一句|上一轮)"
+)
 
 
 def _compatible_base_url():
@@ -41,6 +48,9 @@ class IntentService:
             f"当前北京时间：{now}\n"
             "普通聊天、闲聊或无需工具时调用 continue_chat。"
             "用户明确结束对话时调用 exit_chat。"
+            "用户询问上一轮、上一句、上一条、刚才或刚刚说了什么时，"
+            "必须调用 continue_chat，由当前会话工作记忆回答；"
+            "不得调用 search_memories。"
             "天气、待办列表、过去记忆分别调用 get_weather、list_todos、"
             "search_memories。\n"
             "只有用户明确要求创建提醒/待办时才调用 add_todo；"
@@ -51,6 +61,9 @@ class IntentService:
         )
 
     def detect_intent(self, user_input):
+        if _CURRENT_SESSION_RECALL_PATTERN.search(user_input or ""):
+            logger.info("当前会话回忆命中工作记忆路由。")
+            return [{"function_call": {"name": "continue_chat"}}]
         try:
             response = self.client.chat.completions.create(
                 model=self.model,

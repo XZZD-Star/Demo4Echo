@@ -99,7 +99,7 @@ class WebSocketServer:
             if process_task:
                 process_task.cancel()
             logger.warning(f"Connection closed: {e}")
-            self.service_manager.reset_services()
+            self.service_manager.reset_services(clear_chat=True)
         finally:
             if process_task:
                 process_task.cancel()
@@ -110,7 +110,7 @@ class WebSocketServer:
             self.service_manager.client_ws = None
             self.service_manager.set_client_state("unknown")
             self.service_manager.drain_send_queues()
-            self.service_manager.reset_services()
+            self.service_manager.reset_services(clear_chat=True)
             self.service_manager.invalidate_chat_turn()
             self.service_manager.clear_voice_trace()
 

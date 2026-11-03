@@ -6,6 +6,7 @@ from services import assistant_actions
 class LLMModel:
     def __init__(self, model_name: str = "qwen-turbo"):
         self.model_name = model_name
+        self.max_context_messages = 24
         # 对话初始历史记录
         # 默认的是这个content
         self.messages = [
@@ -28,6 +29,15 @@ class LLMModel:
         :param content: 消息内容
         """
         self.messages.append({"role": role, "content": content})
+        self.trim_messages()
+
+    def trim_messages(self):
+        """Keep the system prompt and the most recent working memory."""
+        if len(self.messages) <= self.max_context_messages + 1:
+            return
+        self.messages = [self.messages[0]] + self.messages[
+            -self.max_context_messages:
+        ]
 
     def clear_messages(self):
         """

@@ -126,6 +126,9 @@ class ServiceManager:
         self.notify_playing = False         # 正在播报通知
         self.chat_turn_id = 0
         self.chat_turn_lock = threading.Lock()
+        self._conversation_session_id = None
+        self._conversation_session_generation = 0
+        self._conversation_session_lock = threading.Lock()
         self.owner_id = "ou_1359f562d0a768f91232760499bc1cc0"  # Shared Feishu owner
         self.feishu_chat_id = global_settings.FEISHU_CHAT_ID
 
@@ -270,9 +273,26 @@ class ServiceManager:
             except queue.Empty:
                 pass
 
-    def reset_services(self):
+    def ensure_conversation_session(self):
+        """Return the working-memory session bound to this DeskBot connection."""
+        with self._conversation_session_lock:
+            if not self._conversation_session_id:
+                self._conversation_session_generation += 1
+                self._conversation_session_id = (
+                    f"voice-session-{int(time.time() * 1000)}-"
+                    f"{self._conversation_session_generation}"
+                )
+            return self._conversation_session_id
+
+    def end_conversation(self):
+        """Clear only working memory when the DeskBot connection ends."""
+        with self._conversation_session_lock:
+            self._conversation_session_id = None
+        self.chat_service.chat_clear()
+
+    def reset_services(self, clear_chat=False):
         """
-        重置所有服务的状态
+        重置运行时服务；普通 Idle 默认保留工作记忆。
         """
         self.is_vad = False
 
@@ -285,7 +305,8 @@ class ServiceManager:
             self.asr_service.reset()
         self._asr_ready.clear()
 
-        self.chat_service.chat_clear()
+        if clear_chat:
+            self.end_conversation()
 
         # 正在播报通知时不要关闭 TTS 流，避免打断。
         if self.notify_playing:
@@ -606,7 +627,7 @@ class ServiceManager:
             return
         observer.enqueue_turn(
             owner_id=self.owner_id,
-            session_id=self._active_chat_trace_id or "voice",
+            session_id=self.ensure_conversation_session(),
             turn_id=self._active_chat_trace_id or str(turn_id),
             source="voice",
             user_text=user_text,
@@ -625,6 +646,7 @@ class ServiceManager:
         self._active_chat_trace_id = (
             self.active_voice_trace_id() or self.begin_voice_trace()
         )
+        session_id = self.ensure_conversation_session()
         self._tts_first_data_seen = False
         started_at = time.monotonic()
         flow_log.emit("llm", "start", "info",
@@ -710,7 +732,7 @@ class ServiceManager:
                 history=history_list,
                 is_stream=True,
                 owner_id=self.owner_id,
-                session_id=self._active_chat_trace_id or "voice",
+                session_id=session_id,
             )
             if not self.is_chat_turn_active(turn_id):
                 logger.warning("聊天返回时本轮已结束，丢弃结果。")
