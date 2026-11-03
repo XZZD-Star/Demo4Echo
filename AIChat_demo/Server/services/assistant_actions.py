@@ -5,54 +5,11 @@ import re
 from datetime import datetime, timezone, timedelta
 
 import echomate_store
+from assistant_core import MEMORY_TOOL, TODO_TOOL
+from assistant_tools import execute_read_tool
 
 LOCAL_TZ = echomate_store.LOCAL_TZ
 
-
-
-def _tool_descriptor(name, description, properties, required):
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-        },
-    }
-
-
-TODO_TOOL = _tool_descriptor(
-    "add_todo",
-    "创建一条待办，到点会通过桌宠和飞书提醒。用户明确要求提醒或添加待办时调用。",
-    {
-        "title": {"type": "string", "description": "要做的事情"},
-        "due_at": {
-            "type": "string",
-            "description": "ISO 8601 带时区时间，例如 2026-10-27T09:00:00+08:00",
-        },
-        "notify_deskbot": {"type": "boolean", "description": "是否通过桌宠播报"},
-        "notify_feishu": {"type": "boolean", "description": "是否通过飞书提醒"},
-    },
-    ["title", "due_at"],
-)
-
-MEMORY_TOOL = _tool_descriptor(
-    "propose_memory",
-    "当用户表达长期偏好、个人资料或希望以后记住的信息时，创建一个待确认记忆候选。不要直接写入正式记忆。",
-    {
-        "content": {"type": "string", "description": "简洁完整的记忆内容"},
-        "category": {
-            "type": "string",
-            "enum": ["profile", "preference", "fact", "task"],
-            "description": "记忆分类",
-        },
-    },
-    ["content"],
-)
 
 ASSISTANT_TOOLS = [TODO_TOOL, MEMORY_TOOL]
 
@@ -321,16 +278,45 @@ def execute_tool_call(name, arguments, owner_id, source, chat_id=""):
             "result": result,
         }
 
-    return {"ok": False, "error": f"unknown tool: {name}"}
+    try:
+        args = json.loads(arguments or "{}")
+    except (TypeError, json.JSONDecodeError):
+        args = {}
+    return execute_read_tool(name, args, owner_id)
 
 
-def memory_prompt_block(owner_id):
-    items = echomate_store.memory_context(owner_id)
-    if not items:
+def memory_prompt_block(owner_id, query="", session_id=""):
+    try:
+        items = echomate_store.memory_context(owner_id, limit=30)
+    except Exception:
+        items = []
+    chat_items = []
+    if query:
+        try:
+            chat_items = echomate_store.search_chat_memories(
+                owner_id,
+                query,
+                exclude_session_id=session_id,
+                limit=3,
+            )
+        except Exception:
+            chat_items = []
+    if not items and not chat_items:
         return ""
-    lines = "\n".join(f"- {item['content']}" for item in items)
-    return (
-        "\n\n以下是用户确认过的长期记忆，回答时优先使用；"
-        "与当前事实冲突时先指出，不要编造：\n"
-        f"<memory>\n{lines}\n</memory>"
-    )
+
+    blocks = []
+    if items:
+        lines = "\n".join(f"- {item['content']}" for item in items)
+        blocks.append(
+            "以下是用户长期偏好或稳定资料，回答时优先使用；"
+            "与当前事实冲突时先指出，不要编造：\n"
+            f"<long_term_preferences>\n{lines}\n</long_term_preferences>"
+        )
+    if chat_items:
+        lines = "\n".join(f"- {item['content']}" for item in chat_items)
+        blocks.append(
+            "以下是过去会话中的相关聊天记忆，可能已经过时；"
+            "只能作为上下文，不要当成永久事实：\n"
+            f"<past_chat_context>\n{lines}\n</past_chat_context>"
+        )
+    return "\n\n" + "\n\n".join(blocks)

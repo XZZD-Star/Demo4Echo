@@ -23,6 +23,7 @@ class ChatService:
         history: Optional[Dict] = None,
         is_stream: bool = False,
         owner_id: str = "",
+        session_id: str = "",
     ) -> str:
         if history:
             for item in history:
@@ -39,7 +40,11 @@ class ChatService:
             "不要声称已永久保存。"
         )
         if owner_id:
-            system += assistant_actions.memory_prompt_block(owner_id)
+            system += assistant_actions.memory_prompt_block(
+                owner_id,
+                query=user_input,
+                session_id=session_id,
+            )
         self.chat_llm_model.set_model_sys_content(system)
 
         if is_stream:

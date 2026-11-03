@@ -176,6 +176,89 @@ class SqliteArchitectureTest(unittest.TestCase):
             [],
         )
 
+    def test_chat_memory_search_and_delete_are_scoped(self):
+        first_id, first_result = echomate_store.add_chat_memory(
+            "owner",
+            "用户最近在准备挑战杯比赛",
+            session_id="session-a",
+            source_turn_id="turn-a",
+        )
+        second_id, second_result = echomate_store.add_chat_memory(
+            "owner",
+            "用户喜欢周末散步",
+            session_id="session-b",
+            source_turn_id="turn-b",
+        )
+        self.assertEqual(first_result, "created")
+        self.assertEqual(second_result, "created")
+        self.assertNotEqual(first_id, second_id)
+
+        matches = echomate_store.search_chat_memories(
+            "owner",
+            "挑战杯进展怎么样",
+            exclude_session_id="session-current",
+        )
+        self.assertEqual([item["id"] for item in matches], [first_id])
+        self.assertTrue(
+            echomate_store.delete_chat_memory("owner", first_id)
+        )
+        self.assertEqual(
+            echomate_store.list_chat_memories("owner")[0]["id"],
+            second_id,
+        )
+
+    def test_preference_upsert_updates_same_key(self):
+        first_id, first_result = echomate_store.upsert_preference_memory(
+            "owner",
+            "用户喜欢先听结论",
+            "response_style",
+            "voice_auto",
+            confidence=0.9,
+        )
+        second_id, second_result = echomate_store.upsert_preference_memory(
+            "owner",
+            "用户喜欢先听结论，再补充细节",
+            "response_style",
+            "voice_auto",
+            confidence=0.95,
+        )
+        self.assertEqual(first_result, "created")
+        self.assertEqual(second_id, first_id)
+        self.assertEqual(second_result, "updated")
+        with echomate_store.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT content, evidence_count, confidence
+                FROM memories WHERE id = ?
+                """,
+                (first_id,),
+            ).fetchone()
+        self.assertIn("补充细节", row["content"])
+        self.assertEqual(row["evidence_count"], 2)
+        self.assertAlmostEqual(row["confidence"], 0.95)
+
+    def test_assistant_actions_dispatch_shared_read_tools(self):
+        from services import assistant_actions
+
+        due_at = (
+            datetime.now(timezone.utc) + timedelta(hours=1)
+        ).isoformat(timespec="seconds")
+        todo_id, result = echomate_store.create_todo(
+            "owner",
+            "共享工具测试",
+            due_at,
+            source="voice",
+        )
+        self.assertEqual(result, "created")
+        response = assistant_actions.execute_tool_call(
+            "list_todos",
+            "{}",
+            owner_id="owner",
+            source="voice",
+        )
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["items"][0]["id"], todo_id)
+
     def test_playback_failure_is_not_acked_or_reclaimed(self):
         self._insert_due_todo()
         echomate_store.materialize_due_reminders()

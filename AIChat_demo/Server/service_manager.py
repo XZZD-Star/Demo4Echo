@@ -1,4 +1,6 @@
 from config.settings import global_settings
+import assistant_core
+from memory_observer import MemoryObserver
 from services.chat_service import ChatService
 from services.tts_service import TTSService
 from tools.registry import global_registry
@@ -92,6 +94,10 @@ class ServiceManager:
 
         self.intent_service = IntentService(global_registry)
         self.chat_service = ChatService()
+        self.memory_observer = MemoryObserver(
+            self.intent_service.client,
+            self.intent_service.model,
+        )
         self.tts_service = TTSService()
         self.is_vad = False  # 防止VAD发生后还语音加入
         self._active_chat_trace_id = None
@@ -592,6 +598,21 @@ class ServiceManager:
         flow_log.emit("llm", "turn_end", "ok",
                       trace_id=self._active_chat_trace_id)
 
+    def _queue_memory_observation(self, user_text, reply, tool_runs, turn_id):
+        observer = getattr(self, "memory_observer", None)
+        if observer is None:
+            return
+        if any(run.get("tool") == "propose_memory" for run in tool_runs):
+            return
+        observer.enqueue_turn(
+            owner_id=self.owner_id,
+            session_id=self._active_chat_trace_id or "voice",
+            turn_id=self._active_chat_trace_id or str(turn_id),
+            source="voice",
+            user_text=user_text,
+            tool_runs=tool_runs,
+        )
+
     def chat_start_task(self, text):
         """
         处理识别到的文本，进行对话
@@ -622,6 +643,7 @@ class ServiceManager:
                 logger.warning("意图返回时本轮已结束，丢弃结果。")
                 return
             history_list = []
+            tool_runs = []
             todo_result = None
             todo_error = None
             # 2.执行函数调用（如果有）
@@ -653,6 +675,9 @@ class ServiceManager:
                     source="deskbot",
                     chat_id=self.feishu_chat_id,
                 )
+                tool_runs.append(
+                    assistant_core.normalize_tool_run(name, result)
+                )
                 if name == "add_todo":
                     todo_result = result
                     if not result.get("ok"):
@@ -661,12 +686,31 @@ class ServiceManager:
                     "role": "user",
                     "content": f"工具 {name} 执行结果：{result}",
                 })
+            if todo_error:
+                reply = {
+                    "past_due": "这个时间已经过去了，我没有创建待办。请给我一个之后的时间。",
+                    "bad_due": "我没有识别出有效时间，待办没有创建。",
+                    "empty": "待办内容不能为空。",
+                    "too_long": "待办内容太长了。",
+                }.get(todo_error, "待办没有创建成功，请换个说法再试一次。")
+                self._speak_reply(reply, turn_id)
+                self._finish_chat_reply(turn_id)
+                return
+            if todo_result and todo_result.get("ok"):
+                reply = (
+                    f"好的，已添加待办：{todo_result['title']}，"
+                    f"{todo_result.get('due_speech') or todo_result['due_text']} 提醒你。"
+                )
+                self._speak_reply(reply, turn_id)
+                self._finish_chat_reply(turn_id)
+                return
             # 3.调用聊天服务生成文字
             answers = self.chat_service.generate_chat_response(
                 text,
                 history=history_list,
                 is_stream=True,
                 owner_id=self.owner_id,
+                session_id=self._active_chat_trace_id or "voice",
             )
             if not self.is_chat_turn_active(turn_id):
                 logger.warning("聊天返回时本轮已结束，丢弃结果。")
@@ -677,16 +721,6 @@ class ServiceManager:
                     "抱歉，我暂时无法处理这个请求，请稍后再试。",
                     turn_id,
                 )
-                self._finish_chat_reply(turn_id)
-                return
-            if todo_error:
-                reply = {
-                    "past_due": "这个时间已经过去了，我没有创建待办。请给我一个之后的时间。",
-                    "bad_due": "我没有识别出有效时间，待办没有创建。",
-                    "empty": "待办内容不能为空。",
-                    "too_long": "待办内容太长了。",
-                }.get(todo_error, "待办没有创建成功，请换个说法再试一次。")
-                self._speak_reply(reply, turn_id)
                 self._finish_chat_reply(turn_id)
                 return
             if isinstance(answers, list):
@@ -703,20 +737,27 @@ class ServiceManager:
                     reply = "这件事没有处理成功，请再说一次。"
                 self._speak_reply(reply, turn_id)
                 self._finish_chat_reply(turn_id)
+                self._queue_memory_observation(
+                    text, reply, tool_runs, turn_id
+                )
                 return
 
+            final_reply = None
             if history_list:
-                reply = "".join(
+                final_reply = "".join(
                     chunk for chunk in answers
                     if isinstance(chunk, str)
                 ).strip()
-                logger.info("[回复]: %s", reply)
-                self._speak_reply(reply, turn_id)
+                logger.info("[回复]: %s", final_reply)
+                self._speak_reply(final_reply, turn_id)
             else:
                 if isinstance(answers, str):
                     answers = iter([answers])
-                self._stream_reply_to_tts(answers, turn_id)
+                final_reply = self._stream_reply_to_tts(answers, turn_id)
             self._finish_chat_reply(turn_id)
+            self._queue_memory_observation(
+                text, final_reply, tool_runs, turn_id
+            )
         finally:
             flow_log.emit(
                 "llm", "turn_complete", "ok",
