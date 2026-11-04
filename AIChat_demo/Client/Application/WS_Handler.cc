@@ -1,5 +1,6 @@
 #include "WS_Handler.h"
 #include "StateConfig.h"
+#include "UserStates/Thinking.h"
 #include "../Utils/user_log.h"
 
 void WSHandler::ws_msg_handle(const std::string& message, bool is_binary, Application* app) {
@@ -116,6 +117,9 @@ void WSHandler::handle_chat_message(const Json::Value& root, Application* app) {
         if (dialogueStr == "end") {
             USER_LOG_INFO("Received dialogue end.");
             app->set_dialogue_completed(true);
+        } else if (dialogueStr == "processing") {
+            USER_LOG_INFO("Received dialogue processing.");
+            ThinkingState::RefreshTimeout(app);
         }
     }
 }

@@ -39,6 +39,21 @@ void stop_aichat_app(void* app_ptr) {
     }
 }
 
+void set_aichat_app_chat_interaction(void* app_ptr, bool enabled) {
+    if (app_ptr) {
+        auto* app = static_cast<Application*>(app_ptr);
+        app->set_chat_interaction_enabled(enabled);
+    }
+}
+
+bool get_aichat_app_chat_interaction(void* app_ptr) {
+    if (app_ptr) {
+        auto* app = static_cast<Application*>(app_ptr);
+        return app->get_chat_interaction_enabled();
+    }
+    return false;
+}
+
 // 获取当前状态
 ChatState get_aichat_app_state(void* app_ptr) {
     if (app_ptr) {

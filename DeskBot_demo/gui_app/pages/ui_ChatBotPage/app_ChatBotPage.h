@@ -16,6 +16,10 @@ int stop_ai_chat();
 // 获取 AI Chat 状态
 int get_ai_chat_state(void);
 
+// 页面内语音交互开关；后台播报不受影响。
+void set_ai_chat_interaction_enabled(bool enabled);
+bool is_ai_chat_interaction_enabled(void);
+
 // 专门处理Intent，目前只有运动
 void chat_bot_get_intent_process(void);
 

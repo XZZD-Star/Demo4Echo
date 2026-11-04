@@ -62,6 +62,18 @@ int stop_ai_chat(void) {
     stop_aichat_app(app_instance);
 }
 
+void set_ai_chat_interaction_enabled(bool enabled)
+{
+    if (app_instance) {
+        set_aichat_app_chat_interaction(app_instance, enabled);
+    }
+}
+
+bool is_ai_chat_interaction_enabled(void)
+{
+    return app_instance && get_aichat_app_chat_interaction(app_instance);
+}
+
 // 获取 AI Chat 状态
 int get_ai_chat_state(void) {
     // 如果应用没有运行，返回错误状态
