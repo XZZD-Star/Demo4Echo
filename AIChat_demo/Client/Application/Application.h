@@ -10,9 +10,26 @@
 
 #include <thread>
 #include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <mutex>
+
+enum class AsrPhase {
+    none,
+    preparing,
+    capturing,
+    awaiting_result,
+    terminal,
+};
+
+enum class PlaybackKind {
+    none,
+    wake_prompt,
+    notify_prompt,
+    server_reply,
+};
 
 class Application {
 public:
@@ -47,6 +64,35 @@ public:
     }
     bool get_tts_completed() {
         return tts_completed_;
+    }
+
+    void set_tts_error(bool flag) {
+        tts_error_.store(flag);
+    }
+    bool get_tts_error() const {
+        return tts_error_.load();
+    }
+
+    void set_asr_ready(bool flag) {
+        asr_ready_.store(flag);
+    }
+    bool get_asr_ready() const {
+        return asr_ready_.load();
+    }
+
+    std::string begin_voice_turn();
+    std::string get_active_turn_id();
+    bool is_current_turn(const std::string& turn_id);
+    bool set_asr_phase(const std::string& turn_id, AsrPhase phase);
+    bool mark_asr_terminal(const std::string& turn_id);
+    AsrPhase get_asr_phase(const std::string& turn_id);
+    bool get_asr_terminal(const std::string& turn_id);
+
+    void set_playback_kind(PlaybackKind kind) {
+        playback_kind_.store(kind);
+    }
+    PlaybackKind get_playback_kind() const {
+        return playback_kind_.load();
     }
 
     void set_dialogue_completed(bool flag) {
@@ -114,6 +160,8 @@ public:
 private:
     bool first_audio_msg_received_ = false;
     bool tts_completed_ = false;
+    std::atomic<bool> tts_error_{false};
+    std::atomic<bool> asr_ready_{false};
     bool dialogue_completed_ = false;
     std::string aliyun_api_key_;
     int ws_protocolVersion_;
@@ -121,6 +169,12 @@ private:
     std::atomic<bool> chat_interaction_enabled_{false};
     std::atomic<int> notify_id_{0};
     std::atomic<bool> first_tts_audio_received_{false};
+    std::atomic<PlaybackKind> playback_kind_{PlaybackKind::none};
+    std::mutex turn_mutex_;
+    uint64_t turn_generation_ = 0;
+    std::string active_turn_id_;
+    AsrPhase asr_phase_ = AsrPhase::none;
+    bool asr_terminal_ = false;
     std::vector<int> notify_ids_;
     mutable std::mutex notify_ids_mutex_;
     // 原子变量用于通知线程退出

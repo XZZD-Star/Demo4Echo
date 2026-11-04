@@ -20,9 +20,32 @@ void ThinkingState::Enter(Application* app) {
 void ThinkingState::Run(Application* app) {
     auto deadline = std::chrono::steady_clock::now()
                   + std::chrono::seconds(25);
+    auto dialogue_end_deadline = std::chrono::steady_clock::time_point::max();
     long long observed_generation = timeout_generation_.load();
     while (state_running_.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (app->get_tts_error()) {
+            USER_LOG_WARN("Reply failed before TTS playback.");
+            app->set_tts_error(false);
+            app->eventQueue_.Enqueue(
+                static_cast<int>(AppEvent::reply_failed));
+            break;
+        }
+        if (
+            app->get_dialogue_completed()
+            && !app->get_first_tts_audio_received()
+        ) {
+            if (dialogue_end_deadline == std::chrono::steady_clock::time_point::max()) {
+                dialogue_end_deadline = std::chrono::steady_clock::now()
+                                      + std::chrono::seconds(8);
+            }
+            if (std::chrono::steady_clock::now() >= dialogue_end_deadline) {
+                USER_LOG_WARN("Dialogue ended without TTS audio.");
+                app->eventQueue_.Enqueue(
+                    static_cast<int>(AppEvent::reply_failed));
+                break;
+            }
+        }
         long long current_generation = timeout_generation_.load();
         if (current_generation != observed_generation) {
             observed_generation = current_generation;
