@@ -3,7 +3,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 import dashscope
-from echomate_credentials import credential
+from echomate_core.credentials import credential
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(SERVER_DIR / ".env", override=False)

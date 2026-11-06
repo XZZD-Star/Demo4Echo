@@ -12,7 +12,7 @@ from config.settings import global_settings
 from service_manager import ServiceManager
 from services.notify_service import NotifyService
 from services.reminder_service import DeskbotReminderService
-from tools import notify_store
+from echomate_core import notify as notify_store
 from tools import flow_log
 from tools.logger import logger
 

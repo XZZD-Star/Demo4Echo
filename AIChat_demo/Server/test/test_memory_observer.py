@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SHARED_ROOT = ROOT.parents[3] / "shared"
-sys.path.insert(0, str(SHARED_ROOT))
+CORE_ROOT = ROOT.parents[1] / "echomate_core"
+sys.path.insert(0, str(CORE_ROOT))
 sys.path.insert(0, str(ROOT))
 
 import echomate_store

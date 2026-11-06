@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from openai import OpenAI
 
-import assistant_core
+from echomate_core import assistant as assistant_core
 from config.settings import global_settings
 from tools.logger import logger
 

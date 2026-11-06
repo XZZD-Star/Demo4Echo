@@ -1,7 +1,7 @@
 import dashscope
 from tools.logger import logger
 from config.settings import global_settings
-from services import assistant_actions
+from echomate_core import actions as assistant_actions
 
 class LLMModel:
     def __init__(self, model_name: str = "qwen-turbo"):

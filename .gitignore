@@ -13,3 +13,8 @@ AIChat_demo/Server/test/*.pcm
 AIChat_demo/Server/.env
 AIChat_demo/Server/.env.*
 !AIChat_demo/Server/.env.example
+
+# Python package artifacts
+**/__pycache__/
+*.pyc
+*.egg-info/

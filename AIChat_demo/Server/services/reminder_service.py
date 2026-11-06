@@ -2,9 +2,9 @@
 
 import time
 
-import echomate_store
+from echomate_core import store as echomate_store
 from services.notify_service import NotifyService
-from tools import notify_store
+from echomate_core import notify as notify_store
 from tools.logger import logger
 
 

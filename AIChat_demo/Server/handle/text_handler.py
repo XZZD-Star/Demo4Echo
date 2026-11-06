@@ -1,7 +1,8 @@
 from service_manager import ServiceManager
 from tools.logger import logger
 from tools.registry import global_registry
-from tools import flow_log, notify_store
+from tools import flow_log
+from echomate_core import notify as notify_store
 
 class TextHandler:
     def __init__(self, service_manager: ServiceManager):

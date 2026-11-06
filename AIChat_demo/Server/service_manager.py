@@ -1,11 +1,11 @@
 from config.settings import global_settings
-import assistant_core
-from memory_observer import MemoryObserver
+from echomate_core import assistant as assistant_core
+from echomate_core.observer import MemoryObserver
 from services.chat_service import ChatService
 from services.tts_service import TTSService
 from tools.registry import global_registry
 from services.intent_service import IntentService
-from services import assistant_actions
+from echomate_core import actions as assistant_actions
 from tools.audio_processor import AudioProcessor
 from threads.task_manager import TaskManager
 from tools.logger import logger

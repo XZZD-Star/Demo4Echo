@@ -2,7 +2,7 @@ from typing import Dict, Optional
 
 from config.settings import global_settings
 from models.llm_model import LLMModel
-from services import assistant_actions
+from echomate_core import actions as assistant_actions
 
 
 class ChatService:

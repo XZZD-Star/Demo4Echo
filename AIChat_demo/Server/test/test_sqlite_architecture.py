@@ -12,16 +12,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-if ROOT.name == "Server":
-    SHARED_ROOT = ROOT.parents[3] / "shared"
-    SERVER_ROOT = ROOT
-    MAIN_PATH = SERVER_ROOT / "main.py"
-else:
-    SHARED_ROOT = ROOT / "shared"
-    SERVER_ROOT = ROOT / "server"
-    MAIN_PATH = SERVER_ROOT / "main.py"
+CORE_ROOT = ROOT.parents[1] / "echomate_core"
+SERVER_ROOT = ROOT
+MAIN_PATH = SERVER_ROOT / "main.py"
 
-sys.path.insert(0, str(SHARED_ROOT))
+sys.path.insert(0, str(CORE_ROOT))
 sys.path.insert(0, str(SERVER_ROOT))
 
 import echomate_store
