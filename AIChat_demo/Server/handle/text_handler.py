@@ -1,3 +1,6 @@
+import math
+import time
+
 from service_manager import ServiceManager
 from tools.logger import logger
 from tools.registry import global_registry
@@ -45,6 +48,68 @@ class TextHandler:
             )
             # Use the prompt playback time to prewarm cloud ASR.
             self.service_manager.start_asr_session()
+
+        elif data.get('type') == 'sensor_report':
+            temperature = data.get('temperature_c')
+            humidity = data.get('humidity_percent')
+            pressure = data.get('pressure_hpa')
+            valid_temperature = (
+                isinstance(temperature, (int, float))
+                and not isinstance(temperature, bool)
+                and math.isfinite(temperature)
+                and -40 <= temperature <= 85
+            )
+            valid_humidity = (
+                humidity is None
+                or (
+                    isinstance(humidity, (int, float))
+                    and not isinstance(humidity, bool)
+                    and math.isfinite(humidity)
+                    and 0 <= humidity <= 100
+                )
+            )
+            valid_pressure = (
+                isinstance(pressure, (int, float))
+                and not isinstance(pressure, bool)
+                and math.isfinite(pressure)
+                and 300 <= pressure <= 1100
+            )
+            if not valid_temperature or not valid_humidity or not valid_pressure:
+                logger.warning("忽略非法传感器播报数据：%s", data)
+                return
+
+            if humidity is None:
+                text = (
+                    f"当前室内温度{temperature:.1f}摄氏度，"
+                    f"气压{pressure:.1f}百帕。"
+                )
+            else:
+                text = (
+                    f"当前室内温度{temperature:.1f}摄氏度，"
+                    f"湿度{humidity:.1f}%，"
+                    f"气压{pressure:.1f}百帕。"
+                )
+            dedupe_key = f"sensor-pir-{int(time.time() // 60)}"
+            try:
+                notify_id = notify_store.enqueue(
+                    "manual",
+                    text,
+                    dedupe_key=dedupe_key,
+                    priority=3,
+                    ttl_minutes=1,
+                )
+                if notify_id is None:
+                    logger.info("传感器播报已去重：%s", text)
+                else:
+                    logger.info("传感器播报入队 #%s：%s", notify_id, text)
+                    flow_log.emit(
+                        "sensor", "queued", "info",
+                        trace_id=f"notify-{notify_id}",
+                        notify_id=notify_id,
+                        message="pir environmental report",
+                    )
+            except Exception as exc:
+                logger.warning("传感器播报入队失败：%s", exc)
 
         elif data.get('type') == 'notify_ack':
             ids = data.get('ids')
