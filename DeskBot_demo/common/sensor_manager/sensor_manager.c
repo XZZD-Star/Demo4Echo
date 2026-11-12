@@ -33,7 +33,6 @@
 #define SENSOR_LOG_INTERVAL_MS 5000
 #define SENSOR_RETRY_INTERVAL_MS 5000
 #define PIR_DEBOUNCE_MS 300
-#define PIR_REARM_LOW_MS 2000
 
 typedef struct {
     uint16_t dig_T1;
@@ -59,7 +58,6 @@ static sensor_data_t latest_data;
 static sensor_pir_callback_t pir_callback;
 static void *pir_callback_user_data;
 static bool auto_brightness = true;
-static int current_light_band = -1;
 
 static int bh1750_fd = -1;
 static int bh1750_addr = BH1750_ADDR_PRIMARY;
@@ -330,19 +328,13 @@ static void pir_init(void)
 
 static int normal_light_band(float lux)
 {
-    if (lux < 50.0f) {
+    if (lux < 80.0f) {
         return 0;
     }
-    if (lux < 120.0f) {
+    if (lux < 300.0f) {
         return 1;
     }
-    if (lux < 300.0f) {
-        return 2;
-    }
-    if (lux < 800.0f) {
-        return 3;
-    }
-    return 4;
+    return 2;
 }
 
 static int map_lux_to_band(float lux, int current_band)
@@ -352,33 +344,23 @@ static int map_lux_to_band(float lux, int current_band)
         return band;
     }
 
-    /* Add 20 lux of hysteresis around each boundary. */
+    /* Add hysteresis around the two boundaries. */
     switch (current_band) {
     case 0:
-        return lux < 60.0f ? 0 : band;
+        return lux < 100.0f ? 0 : band;
     case 1:
-        if (lux <= 40.0f) {
+        if (lux <= 60.0f) {
             return 0;
         }
-        return lux >= 140.0f ? band : 1;
-    case 2:
-        if (lux < 100.0f || lux > 320.0f) {
-            return band;
-        }
-        return 2;
-    case 3:
-        if (lux < 280.0f || lux > 820.0f) {
-            return band;
-        }
-        return 3;
+        return lux >= 350.0f ? band : 1;
     default:
-        return lux < 780.0f ? band : 4;
+        return lux <= 280.0f ? band : 2;
     }
 }
 
 static int brightness_for_band(int band)
 {
-    static const int brightness[] = {15, 30, 45, 65, 85};
+    static const int brightness[] = {20, 50, 85};
     if (band < 0 || band >= (int)(sizeof(brightness) / sizeof(brightness[0]))) {
         return 45;
     }
@@ -445,9 +427,6 @@ static void update_auto_brightness(float lux)
             applied = target;
             applied_band = band;
             last_adjust = current;
-            pthread_mutex_lock(&sensor_mutex);
-            current_light_band = band;
-            pthread_mutex_unlock(&sensor_mutex);
             printf("[SENSOR] auto brightness: lux=%.1f band=%d brightness=%d\n",
                    lux, band, target);
         }
@@ -482,6 +461,7 @@ static void run_mock_sensor(void)
         uint64_t current = now_ms();
         sensor_data_t data = {
             .lux = mock_lux,
+            .instant_lux = mock_lux,
             .temperature_c = mock_temperature,
             .pressure_hpa = mock_pressure,
             .pir_active = false,
@@ -531,6 +511,8 @@ static void run_board_sensor(void)
     size_t lux_sample_index = 0;
     int warmup = env_int("ECHOMATE_PIR_WARMUP_SECONDS",
                          ECHOMATE_PIR_WARMUP_SECONDS);
+    int rearm = env_int("ECHOMATE_PIR_REARM_SECONDS",
+                        ECHOMATE_PIR_REARM_SECONDS);
     int cooldown = env_int("ECHOMATE_PIR_COOLDOWN_SECONDS",
                            ECHOMATE_PIR_COOLDOWN_SECONDS);
     sensor_data_t data = {0};
@@ -556,6 +538,7 @@ static void run_board_sensor(void)
             && current - last_lux_read >= LUX_READ_INTERVAL_MS) {
             float lux = 0.0f;
             if (bh1750_read(&lux) == 0) {
+                data.instant_lux = lux;
                 lux_samples[lux_sample_index] = lux;
                 lux_sample_index = (lux_sample_index + 1)
                                    % LUX_FILTER_SAMPLES;
@@ -598,7 +581,8 @@ static void run_board_sensor(void)
                 pir_low_since = current;
             }
             if (!pir_armed
-                && current - pir_low_since >= PIR_REARM_LOW_MS) {
+                && current - pir_low_since
+                   >= (uint64_t)rearm * 1000ULL) {
                 pir_armed = true;
             }
         }
@@ -668,7 +652,6 @@ int sensor_manager_init(sensor_pir_callback_t callback, void *user_data)
     pir_callback = callback;
     pir_callback_user_data = user_data;
     auto_brightness = true;
-    current_light_band = -1;
     sensor_running = 1;
 
     if (pthread_create(&sensor_thread, NULL, sensor_thread_entry, NULL) != 0) {
@@ -715,12 +698,4 @@ bool sensor_manager_get_auto_brightness(void)
     bool enabled = auto_brightness;
     pthread_mutex_unlock(&sensor_mutex);
     return enabled;
-}
-
-int sensor_manager_get_light_band(void)
-{
-    pthread_mutex_lock(&sensor_mutex);
-    int band = current_light_band;
-    pthread_mutex_unlock(&sensor_mutex);
-    return band;
 }
