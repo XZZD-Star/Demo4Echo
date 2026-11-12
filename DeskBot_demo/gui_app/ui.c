@@ -250,12 +250,14 @@ static void _sensor_pir_report_cb(const sensor_data_t *data, void *user_data)
         return;
     }
     if (!send_ai_chat_sensor_report(data->temperature_c,
+                                    data->humidity_percent,
                                     data->pressure_hpa)) {
         LV_LOG_WARN("PIR report could not be sent to the server.");
         return;
     }
-    LV_LOG_USER("PIR report sent: %.1fC %.1fhPa",
-                data->temperature_c, data->pressure_hpa);
+    LV_LOG_USER("PIR report sent: %.1fC %.1f%% %.1fhPa",
+                data->temperature_c, data->humidity_percent,
+                data->pressure_hpa);
 }
 
 ///////////////////// timer //////////////////////

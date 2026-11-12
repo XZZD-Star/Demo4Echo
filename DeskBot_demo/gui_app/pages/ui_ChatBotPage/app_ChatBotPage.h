@@ -23,8 +23,9 @@ bool is_ai_chat_idle(void);
 void set_ai_chat_interaction_enabled(bool enabled);
 bool is_ai_chat_interaction_enabled(void);
 
-// 将 PIR 触发时的室内温压数据交给现有 WebSocket/TTS 链路。
-bool send_ai_chat_sensor_report(float temperature_c, float pressure_hpa);
+// 将 PIR 触发时的室内温湿度与气压数据交给现有 WebSocket/TTS 链路。
+bool send_ai_chat_sensor_report(float temperature_c, float humidity_percent,
+                                float pressure_hpa);
 
 // 专门处理Intent，目前只有运动
 void chat_bot_get_intent_process(void);

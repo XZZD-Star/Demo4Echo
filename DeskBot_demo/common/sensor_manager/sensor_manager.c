@@ -23,6 +23,7 @@
 #define BMP280_ADDR_PRIMARY 0x76
 #define BMP280_ADDR_ALT 0x77
 #define BMP280_CHIP_ID 0x58
+#define AHT20_ADDR 0x38
 
 #define SENSOR_POLL_MS 100
 #define LUX_READ_INTERVAL_MS 1000
@@ -30,9 +31,10 @@
 #define LUX_STABLE_SAMPLES 5
 #define LUX_MIN_ADJUST_INTERVAL_MS 8000
 #define ENV_READ_INTERVAL_MS 2000
+#define AHT20_READ_INTERVAL_MS 2000
 #define SENSOR_LOG_INTERVAL_MS 5000
 #define SENSOR_RETRY_INTERVAL_MS 5000
-#define PIR_DEBOUNCE_MS 300
+#define PIR_DEBOUNCE_MS 2000
 
 typedef struct {
     uint16_t dig_T1;
@@ -63,6 +65,7 @@ static int bh1750_fd = -1;
 static int bh1750_addr = BH1750_ADDR_PRIMARY;
 static int bmp280_fd = -1;
 static int bmp280_addr = BMP280_ADDR_PRIMARY;
+static int aht20_fd = -1;
 static bmp280_calib_t bmp280_calib;
 static bool pir_exported = false;
 
@@ -315,6 +318,70 @@ static int bmp280_read(float *temperature_c, float *pressure_hpa)
     return 0;
 }
 
+static int aht20_init(void)
+{
+    int fd = open_i2c_device();
+    if (fd < 0) {
+        return -1;
+    }
+
+    usleep(40000);
+    uint8_t status = 0;
+    if (i2c_read_bytes(fd, AHT20_ADDR, &status, 1) != 0) {
+        close(fd);
+        return -1;
+    }
+
+    if ((status & 0x68) != 0x08) {
+        uint8_t command[3] = {0xBE, 0x08, 0x00};
+        if (i2c_write_bytes(fd, AHT20_ADDR, command, sizeof(command)) != 0) {
+            close(fd);
+            return -1;
+        }
+        usleep(500000);
+        if (i2c_read_bytes(fd, AHT20_ADDR, &status, 1) != 0
+            || (status & 0x68) != 0x08) {
+            close(fd);
+            return -1;
+        }
+    }
+
+    aht20_fd = fd;
+    printf("[SENSOR] AHT20 ready at 0x%02X\n", AHT20_ADDR);
+    return 0;
+}
+
+static int aht20_read(float *temperature_c, float *humidity_percent)
+{
+    uint8_t command[3] = {0xAC, 0x33, 0x00};
+    if (i2c_write_bytes(aht20_fd, AHT20_ADDR, command, sizeof(command)) != 0) {
+        return -1;
+    }
+    usleep(80000);
+
+    uint8_t data[6];
+    if (i2c_read_bytes(aht20_fd, AHT20_ADDR, data, sizeof(data)) != 0
+        || (data[0] & 0x80) != 0) {
+        return -1;
+    }
+
+    uint32_t raw_humidity = ((uint32_t)data[1] << 12)
+                          | ((uint32_t)data[2] << 4)
+                          | (data[3] >> 4);
+    uint32_t raw_temperature = ((uint32_t)(data[3] & 0x0F) << 16)
+                             | ((uint32_t)data[4] << 8)
+                             | data[5];
+
+    *humidity_percent = (float)raw_humidity * 100.0f / 1048576.0f;
+    *temperature_c = (float)raw_temperature * 200.0f / 1048576.0f - 50.0f;
+    if (!isfinite(*humidity_percent) || !isfinite(*temperature_c)
+        || *humidity_percent < 0.0f || *humidity_percent > 100.0f
+        || *temperature_c < -40.0f || *temperature_c > 85.0f) {
+        return -1;
+    }
+    return 0;
+}
+
 static void pir_init(void)
 {
     if (!pir_exported) {
@@ -451,6 +518,7 @@ static void run_mock_sensor(void)
                            ECHOMATE_PIR_COOLDOWN_SECONDS);
     float mock_lux = env_float("ECHOMATE_MOCK_LUX", 120.0f);
     float mock_temperature = env_float("ECHOMATE_MOCK_TEMP_C", 25.6f);
+    float mock_humidity = env_float("ECHOMATE_MOCK_HUMIDITY_PERCENT", 52.3f);
     float mock_pressure = env_float("ECHOMATE_MOCK_PRESSURE_HPA", 1012.4f);
 
     if (pir_interval > 0) {
@@ -463,6 +531,7 @@ static void run_mock_sensor(void)
             .lux = mock_lux,
             .instant_lux = mock_lux,
             .temperature_c = mock_temperature,
+            .humidity_percent = mock_humidity,
             .pressure_hpa = mock_pressure,
             .pir_active = false,
         };
@@ -483,9 +552,10 @@ static void run_mock_sensor(void)
         update_auto_brightness(data.lux);
 
         if (last_log == 0 || current - last_log >= SENSOR_LOG_INTERVAL_MS) {
-            printf("[SENSOR] mock temp=%.1fC pressure=%.1fhPa "
+            printf("[SENSOR] mock temp=%.1fC humidity=%.1f%% pressure=%.1fhPa "
                    "lux=%.1f pir=%d\n",
-                   data.temperature_c, data.pressure_hpa, data.lux,
+                   data.temperature_c, data.humidity_percent,
+                   data.pressure_hpa, data.lux,
                    data.pir_active ? 1 : 0);
             fflush(stdout);
             last_log = current;
@@ -500,12 +570,14 @@ static void run_board_sensor(void)
     uint64_t started = now_ms();
     uint64_t last_lux_read = 0;
     uint64_t last_env_read = 0;
+    uint64_t last_aht_read = 0;
     uint64_t last_log = 0;
     uint64_t last_retry = 0;
     uint64_t last_pir_report = 0;
     uint64_t pir_high_since = 0;
     uint64_t pir_low_since = 0;
     bool pir_armed = false;
+    bool initial_armed = false;
     float lux_samples[LUX_FILTER_SAMPLES] = {0};
     size_t lux_sample_count = 0;
     size_t lux_sample_index = 0;
@@ -520,6 +592,7 @@ static void run_board_sensor(void)
     pir_init();
     bh1750_init();
     bmp280_init();
+    aht20_init();
 
     while (sensor_running) {
         uint64_t current = now_ms();
@@ -530,6 +603,9 @@ static void run_board_sensor(void)
             }
             if (bmp280_fd < 0) {
                 bmp280_init();
+            }
+            if (aht20_fd < 0) {
+                aht20_init();
             }
             last_retry = current;
         }
@@ -568,6 +644,20 @@ static void run_board_sensor(void)
             last_env_read = current;
         }
 
+        if (aht20_fd >= 0
+            && current - last_aht_read >= AHT20_READ_INTERVAL_MS) {
+            float temperature = 0.0f;
+            float humidity = 0.0f;
+            if (aht20_read(&temperature, &humidity) == 0) {
+                data.temperature_c = temperature;
+                data.humidity_percent = humidity;
+            } else {
+                close(aht20_fd);
+                aht20_fd = -1;
+            }
+            last_aht_read = current;
+        }
+
         int pir_level = gpio_get_value(ECHOMATE_PIR_GPIO);
         data.pir_active = pir_level > 0;
         if (data.pir_active) {
@@ -587,6 +677,13 @@ static void run_board_sensor(void)
             }
         }
 
+        if (!initial_armed
+            && current - started >= (uint64_t)warmup * 1000ULL) {
+            initial_armed = true;
+            pir_armed = true;
+            printf("[SENSOR] PIR armed after warmup\n");
+        }
+
         if (data.pir_active
             && pir_high_since != 0
             && current - pir_high_since >= PIR_DEBOUNCE_MS
@@ -604,8 +701,10 @@ static void run_board_sensor(void)
         update_latest(&data);
 
         if (last_log == 0 || current - last_log >= SENSOR_LOG_INTERVAL_MS) {
-            printf("[SENSOR] temp=%.1fC pressure=%.1fhPa lux=%.1f pir=%d\n",
-                   data.temperature_c, data.pressure_hpa, data.lux,
+            printf("[SENSOR] temp=%.1fC humidity=%.1f%% pressure=%.1fhPa "
+                   "lux=%.1f pir=%d\n",
+                   data.temperature_c, data.humidity_percent,
+                   data.pressure_hpa, data.lux,
                    data.pir_active ? 1 : 0);
             fflush(stdout);
             last_log = current;
@@ -621,6 +720,10 @@ static void run_board_sensor(void)
     if (bmp280_fd >= 0) {
         close(bmp280_fd);
         bmp280_fd = -1;
+    }
+    if (aht20_fd >= 0) {
+        close(aht20_fd);
+        aht20_fd = -1;
     }
 }
 

@@ -55,10 +55,12 @@ bool get_aichat_app_chat_interaction(void* app_ptr) {
 }
 
 bool send_aichat_app_sensor_report(void* app_ptr, float temperature_c,
+                                    float humidity_percent,
                                     float pressure_hpa) {
     if (app_ptr) {
         auto* app = static_cast<Application*>(app_ptr);
-        return app->SendSensorReport(temperature_c, pressure_hpa);
+        return app->SendSensorReport(temperature_c, humidity_percent,
+                                     pressure_hpa);
     }
     return false;
 }

@@ -11,6 +11,7 @@ typedef struct {
     float lux;
     float instant_lux;
     float temperature_c;
+    float humidity_percent;
     float pressure_hpa;
     bool pir_active;
 } sensor_data_t;

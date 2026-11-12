@@ -112,11 +112,14 @@ void Application::Run() {
     USER_LOG_WARN("ai chat app run end");
 }
 
-bool Application::SendSensorReport(float temperature_c, float pressure_hpa) {
+bool Application::SendSensorReport(float temperature_c, float humidity_percent,
+                                   float pressure_hpa) {
     if (!ws_client_.IsConnected()
         || !std::isfinite(temperature_c)
+        || !std::isfinite(humidity_percent)
         || !std::isfinite(pressure_hpa)
         || temperature_c < -40.0f || temperature_c > 85.0f
+        || humidity_percent < 0.0f || humidity_percent > 100.0f
         || pressure_hpa < 300.0f || pressure_hpa > 1100.0f) {
         return false;
     }
@@ -124,8 +127,8 @@ bool Application::SendSensorReport(float temperature_c, float pressure_hpa) {
     char message[192];
     int written = std::snprintf(
         message, sizeof(message),
-        R"({"type":"sensor_report","temperature_c":%.1f,"pressure_hpa":%.1f})",
-        temperature_c, pressure_hpa);
+        R"({"type":"sensor_report","temperature_c":%.1f,"humidity_percent":%.1f,"pressure_hpa":%.1f})",
+        temperature_c, humidity_percent, pressure_hpa);
     if (written <= 0 || written >= (int)sizeof(message)) {
         return false;
     }

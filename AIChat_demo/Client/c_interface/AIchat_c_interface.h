@@ -45,8 +45,9 @@ ChatState get_aichat_app_state(void* app_ptr);
 void set_aichat_app_chat_interaction(void* app_ptr, bool enabled);
 bool get_aichat_app_chat_interaction(void* app_ptr);
 
-// 向服务端提交 PIR 触发时的室内温压数据。
+// 向服务端提交 PIR 触发时的室内温湿度与气压数据。
 bool send_aichat_app_sensor_report(void* app_ptr, float temperature_c,
+                                    float humidity_percent,
                                     float pressure_hpa);
 
 // 获取 Intent 数据

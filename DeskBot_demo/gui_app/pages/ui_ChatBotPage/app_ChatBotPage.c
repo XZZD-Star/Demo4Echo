@@ -75,11 +75,12 @@ bool is_ai_chat_interaction_enabled(void)
     return app_instance && get_aichat_app_chat_interaction(app_instance);
 }
 
-bool send_ai_chat_sensor_report(float temperature_c, float pressure_hpa)
+bool send_ai_chat_sensor_report(float temperature_c, float humidity_percent,
+                                float pressure_hpa)
 {
     return app_instance
         && send_aichat_app_sensor_report(app_instance, temperature_c,
-                                        pressure_hpa);
+                                        humidity_percent, pressure_hpa);
 }
 
 // 获取 AI Chat 状态
