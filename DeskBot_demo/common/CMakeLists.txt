@@ -10,6 +10,7 @@ add_library(common STATIC ${COMMON_SOURCES})
 target_include_directories(common PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/sys_manager
     ${CMAKE_CURRENT_SOURCE_DIR}/gpio_manager
+    ${CMAKE_CURRENT_SOURCE_DIR}/sensor_manager
 )
 
 if(TARGET_ARM)

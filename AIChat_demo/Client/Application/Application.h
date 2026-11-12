@@ -157,6 +157,8 @@ public:
         return client_state_.GetCurrentState();
     }
 
+    bool SendSensorReport(float temperature_c, float pressure_hpa);
+
 private:
     bool first_audio_msg_received_ = false;
     bool tts_completed_ = false;

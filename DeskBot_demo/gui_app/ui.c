@@ -10,6 +10,8 @@
 #include "./pages/ui_GameMemoryPage/ui_GameMemoryPage.h"
 #include "./pages/ui_DrawPage/ui_DrawPage.h"
 #include "./pages/ui_CalculatorPage/ui_CalculatorPage.h"
+#include "../common/sensor_manager/sensor_manager.h"
+#include "./pages/ui_ChatBotPage/app_ChatBotPage.h"
 ///////////////////// VARIABLES ////////////////////
 
 lv_lib_pm_t page_manager;
@@ -221,16 +223,39 @@ static void _gpios_init(void)
 {
     // GPIO
     gpio_init(LED_BLUE, OUT_DIRECTION);
+#if ENABLE_MOTOR
     gpio_init(MOTOR1_INA, OUT_DIRECTION);
     gpio_init(MOTOR1_INB, OUT_DIRECTION);
     gpio_init(MOTOR2_INA, OUT_DIRECTION);
     gpio_init(MOTOR2_INB, OUT_DIRECTION);
+#endif
     // set default value
     gpio_set_value(LED_BLUE, 0);
+#if ENABLE_MOTOR
     gpio_set_value(MOTOR1_INA, 0);
     gpio_set_value(MOTOR1_INB, 0);
     gpio_set_value(MOTOR2_INA, 0);
     gpio_set_value(MOTOR2_INB, 0);
+#endif
+}
+
+static void _sensor_pir_report_cb(const sensor_data_t *data, void *user_data)
+{
+    (void)user_data;
+    if (data == NULL) {
+        return;
+    }
+    if (!is_ai_chat_idle()) {
+        LV_LOG_WARN("PIR report skipped: chat is not idle.");
+        return;
+    }
+    if (!send_ai_chat_sensor_report(data->temperature_c,
+                                    data->pressure_hpa)) {
+        LV_LOG_WARN("PIR report could not be sent to the server.");
+        return;
+    }
+    LV_LOG_USER("PIR report sent: %.1fC %.1fhPa",
+                data->temperature_c, data->pressure_hpa);
 }
 
 ///////////////////// timer //////////////////////
@@ -302,4 +327,10 @@ void ui_init(void)
     {
         LV_LOG_ERROR("AIChat app startup failed.");
     }
+
+#if ENABLE_SENSORS
+    if (sensor_manager_init(_sensor_pir_report_cb, NULL) != 0) {
+        LV_LOG_ERROR("Sensor manager startup failed.");
+    }
+#endif
 }

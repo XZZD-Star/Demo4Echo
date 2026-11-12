@@ -1,4 +1,5 @@
 #include "ui_SettingPage.h"
+#include "../../../common/sensor_manager/sensor_manager.h"
 
 ///////////////////// VARIABLES ////////////////////
 
@@ -37,6 +38,7 @@ static void light_slider_event_cb(lv_event_t * e)
     lv_event_code_t code = lv_event_get_code(e);
     if(code == LV_EVENT_VALUE_CHANGED) {
         // set system brightness
+        sensor_manager_set_auto_brightness(false);
         ui_system_para.brightness = lv_slider_get_value(lv_event_get_target(e));
         sys_set_lcd_brightness(ui_system_para.brightness);
     }

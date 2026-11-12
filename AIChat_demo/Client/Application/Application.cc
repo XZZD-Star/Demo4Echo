@@ -3,6 +3,9 @@
 #include "StateConfig.h"
 #include "WS_Handler.h"
 
+#include <cmath>
+#include <cstdio>
+
 WSHandler app_handler;
 
 Application::Application(const std::string& address, int port, const std::string& token, const std::string& deviceId, const std::string& aliyun_api_key, 
@@ -107,4 +110,26 @@ void Application::Run() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     USER_LOG_WARN("ai chat app run end");
+}
+
+bool Application::SendSensorReport(float temperature_c, float pressure_hpa) {
+    if (!ws_client_.IsConnected()
+        || !std::isfinite(temperature_c)
+        || !std::isfinite(pressure_hpa)
+        || temperature_c < -40.0f || temperature_c > 85.0f
+        || pressure_hpa < 300.0f || pressure_hpa > 1100.0f) {
+        return false;
+    }
+
+    char message[192];
+    int written = std::snprintf(
+        message, sizeof(message),
+        R"({"type":"sensor_report","temperature_c":%.1f,"pressure_hpa":%.1f})",
+        temperature_c, pressure_hpa);
+    if (written <= 0 || written >= (int)sizeof(message)) {
+        return false;
+    }
+
+    ws_client_.SendText(message);
+    return true;
 }

@@ -3,6 +3,7 @@
 #include "ui_ChatBotPage.h"
 #include "app_ChatBotPage.h"
 #include "../../../../AIChat_demo/Client/c_interface/AIchat_c_interface.h"
+#include "../../../conf/dev_conf.h"
 
 static void* app_instance = NULL; // AI Chat 应用实例
 static pthread_t ai_chat_thread;  // 线程 ID
@@ -74,6 +75,13 @@ bool is_ai_chat_interaction_enabled(void)
     return app_instance && get_aichat_app_chat_interaction(app_instance);
 }
 
+bool send_ai_chat_sensor_report(float temperature_c, float pressure_hpa)
+{
+    return app_instance
+        && send_aichat_app_sensor_report(app_instance, temperature_c,
+                                        pressure_hpa);
+}
+
 // 获取 AI Chat 状态
 int get_ai_chat_state(void) {
     // 如果应用没有运行，返回错误状态
@@ -82,6 +90,10 @@ int get_ai_chat_state(void) {
     }
     // 获取当前状态
     return get_aichat_app_state(app_instance);
+}
+
+bool is_ai_chat_idle(void) {
+    return get_ai_chat_state() == idle;
 }
 
 // 专门处理Intent，目前只有运动
@@ -122,6 +134,11 @@ void chat_bot_get_intent_process()
 // 0 none, 1 forward, 2 back, 3 left, 4 right.
 void chat_bot_move(int dir)
 {
+#if !ENABLE_MOTOR
+    (void)dir;
+    return;
+#endif
+
     // forward
     if(dir == 1)
     {

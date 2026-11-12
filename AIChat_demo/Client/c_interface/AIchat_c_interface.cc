@@ -54,6 +54,15 @@ bool get_aichat_app_chat_interaction(void* app_ptr) {
     return false;
 }
 
+bool send_aichat_app_sensor_report(void* app_ptr, float temperature_c,
+                                    float pressure_hpa) {
+    if (app_ptr) {
+        auto* app = static_cast<Application*>(app_ptr);
+        return app->SendSensorReport(temperature_c, pressure_hpa);
+    }
+    return false;
+}
+
 // 获取当前状态
 ChatState get_aichat_app_state(void* app_ptr) {
     if (app_ptr) {

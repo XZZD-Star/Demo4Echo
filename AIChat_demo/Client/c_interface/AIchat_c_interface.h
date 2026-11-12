@@ -5,6 +5,8 @@
 extern "C" {
 #endif
 
+#include <stdbool.h>
+
 // 定义 IntentData 结构体
 typedef struct {
     char function_name[128]; // 存储 function_call 的 name
@@ -42,6 +44,10 @@ ChatState get_aichat_app_state(void* app_ptr);
 // 控制页面内语音交互；关闭时仍保持连接和主动播报。
 void set_aichat_app_chat_interaction(void* app_ptr, bool enabled);
 bool get_aichat_app_chat_interaction(void* app_ptr);
+
+// 向服务端提交 PIR 触发时的室内温压数据。
+bool send_aichat_app_sensor_report(void* app_ptr, float temperature_c,
+                                    float pressure_hpa);
 
 // 获取 Intent 数据
 bool get_aichat_app_intent(void* app_ptr, IntentData* intent_data);
