@@ -19,6 +19,7 @@ lv_obj_t * ui_ScrollDots[_APP_CONTAINER_MAX_PAGES];
 lv_timer_t * ui_home_timer;
 lv_obj_t * ui_WifiLabel;
 lv_obj_t * ui_NoWifiLabel;
+static lv_obj_t * ui_LightTintPanel = NULL;
 
 
 //////////////////////// Timer //////////////////////
@@ -35,6 +36,22 @@ static void _wifi_connected_icon_set(bool connected)
         lv_obj_remove_flag(ui_NoWifiLabel, LV_OBJ_FLAG_HIDDEN);     /// Flags
         lv_obj_add_flag(ui_WifiLabel, LV_OBJ_FLAG_HIDDEN);     /// Flags
     }
+}
+
+static void _light_tint_set(void)
+{
+    static const uint32_t colors[] = {
+        0xFF9A3D, 0xFFD24A, 0x66D17A, 0x4DC8D8, 0x5B8CFF
+    };
+    int band = sensor_manager_get_light_band();
+    if (ui_LightTintPanel == NULL || band < 0
+        || band >= (int)(sizeof(colors) / sizeof(colors[0]))) {
+        return;
+    }
+    lv_obj_set_style_bg_color(ui_LightTintPanel, lv_color_hex(colors[band]),
+                              LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_LightTintPanel, 64,
+                            LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
 static void ui_home_timer_cb(lv_timer_t * timer)
@@ -54,6 +71,7 @@ static void ui_home_timer_cb(lv_timer_t * timer)
         ui_system_para.minute = minute;
     }
     _wifi_connected_icon_set(ui_system_para.wifi_connected);
+    _light_tint_set();
 }
 
 ///////////////////// ANIMATIONS ////////////////////
@@ -465,6 +483,7 @@ void ui_HomePage_init(void)
     lv_obj_set_style_bg_opa(ui_TopDragPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_color(ui_TopDragPanel, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_opa(ui_TopDragPanel, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui_LightTintPanel = ui_TopDragPanel;
     // top drag event
     lv_obj_add_event_cb(ui_TopDragPanel, ui_event_TopDrag, LV_EVENT_PRESSING, ui_DropdownPanel);
     lv_obj_add_event_cb(ui_TopDragPanel, ui_event_TopDrag, LV_EVENT_RELEASED, ui_DropdownPanel);
@@ -739,7 +758,7 @@ void ui_HomePage_init(void)
     lv_obj_add_event_cb(ui_CalculatorBtn, ui_event_AppsBtn, LV_EVENT_CLICKED, "CalculatorPage");
 
     // timer
-    ui_home_timer = lv_timer_create(ui_home_timer_cb, 5000, ui_TimeLabel);
+    ui_home_timer = lv_timer_create(ui_home_timer_cb, 1000, ui_TimeLabel);
 
     // load page
     lv_scr_load_anim(ui_HomeScreen, LV_SCR_LOAD_ANIM_MOVE_RIGHT, 100, 0, true);
@@ -751,5 +770,6 @@ void ui_HomePage_init(void)
 void ui_HomePage_deinit(void)
 {
     lv_timer_delete(ui_home_timer);
+    ui_LightTintPanel = NULL;
     return;
 }

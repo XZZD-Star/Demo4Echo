@@ -22,6 +22,7 @@ void sensor_manager_deinit(void);
 bool sensor_manager_get_latest(sensor_data_t *data);
 void sensor_manager_set_auto_brightness(bool enabled);
 bool sensor_manager_get_auto_brightness(void);
+int sensor_manager_get_light_band(void);
 
 #ifdef __cplusplus
 }

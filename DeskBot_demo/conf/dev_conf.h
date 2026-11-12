@@ -34,7 +34,8 @@ extern "C" {
 /* 板端传感器默认参数，可在启动前用同名环境变量覆盖。 */
 #define ECHOMATE_I2C_DEVICE "/dev/i2c-0"
 #define ECHOMATE_PIR_GPIO 33
-#define ECHOMATE_PIR_COOLDOWN_SECONDS 120
+#define ECHOMATE_PIR_WARMUP_SECONDS 60
+#define ECHOMATE_PIR_COOLDOWN_SECONDS 180
 
 #if LV_USE_SIMULATOR
     #define LV_USE_LINUX_FBDEV 0
