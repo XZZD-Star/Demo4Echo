@@ -68,7 +68,7 @@ static int _light_band_for_lux(float lux)
 static void _light_status_update(void)
 {
     static const uint32_t colors[] = {0xE65100, 0x00897B, 0x1565C0};
-    static const int brightness[] = {20, 50, 85};
+    static const int brightness[] = {85, 50, 20};
     sensor_data_t data;
 
     if (ui_LightStatusPanel == NULL || ui_LightStatusLabel == NULL

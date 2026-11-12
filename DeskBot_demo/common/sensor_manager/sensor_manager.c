@@ -360,7 +360,7 @@ static int map_lux_to_band(float lux, int current_band)
 
 static int brightness_for_band(int band)
 {
-    static const int brightness[] = {20, 50, 85};
+    static const int brightness[] = {85, 50, 20};
     if (band < 0 || band >= (int)(sizeof(brightness) / sizeof(brightness[0]))) {
         return 45;
     }
